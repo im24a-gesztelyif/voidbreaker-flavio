@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'VOIDBREAKER — Das letzte Licht',
-  description: 'Ein 3D-Space-Roguelite. Wähle dein Schiff, kombiniere mächtige Upgrades und durchbrich drei Sektoren bis zum Nullherz.',
+  title: 'VOIDBREAKER — The Last Light',
+  description:
+    'A 3D space roguelite for solo pilots and two-player co-op. Choose your ship, build your arsenal, and fight through three sectors to the Nullheart.',
 };
 
 export default function RootLayout({
@@ -23,7 +24,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="de" className="dark">
+    <html lang="en" className="dark">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
