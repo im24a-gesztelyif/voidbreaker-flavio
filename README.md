@@ -59,4 +59,20 @@ The tests cover deterministic simulation, firing cadence, independent co-op move
 
 ## Hosting
 
-The project retains its existing Vinext / Cloudflare / Sites configuration. The configured Sites project currently returns `project_not_found` to the connected account, so this update has not been published. Restore access to that project before deployment. No replacement project or public deployment was created.
+### Vercel
+
+Import this repository into Vercel with the repository root as the Root Directory, then deploy. The committed `vercel.json` sets the framework to **Other**, runs `npm ci` and `npm run build:vercel`, and publishes **`dist/client`**. Do not select the Next.js preset: this project uses Vinext, which has a different build output. These settings are supplied by the repository rather than requiring dashboard overrides.
+
+To reproduce the Vercel build locally:
+
+```sh
+npm run build:vercel
+```
+
+The build exports the game to `dist/client/index.html`, with its JavaScript, styles, fonts, and other public assets. It does not require a Cloudflare Worker or Sites account. Solo gameplay, browser saves, and PeerJS co-op run in the browser as before; invite links use the deployed Vercel address. No multiplayer environment variables are required.
+
+After pushing a change, deploy the new commit in Vercel. Redeploying an older commit will reuse its old configuration.
+
+### Sites / Cloudflare
+
+`npm run dev`, `npm run build`, and `npm start` retain the original Sites / Cloudflare workflow outside Vercel. The existing Sites project previously returned `project_not_found` to the connected account. That account-access issue is separate from Vercel deployment.
