@@ -315,7 +315,9 @@ export default function Home() {
       mouse.current.down = false;
       touch.current = { x: 0, y: 0, active: false };
       actions.current = { dash: false, pulse: false };
-      pauseGame();
+      room.current?.releaseInput();
+      // Visible co-op windows can share a screen without pausing each other.
+      if (room.current?.status !== 'connected' || document.hidden) pauseGame();
       sound.setScene('quiet');
       refresh();
     };
@@ -448,6 +450,10 @@ export default function Home() {
                 sector: sim.current.state.sector + 1,
                 hull: sim.current.state.player.hp,
                 score: sim.current.score(),
+                time: sim.current.state.totalTime,
+                player: { x: sim.current.state.player.x, y: sim.current.state.player.y, dashCooldown: sim.current.state.player.dashCooldown },
+                partner: sim.current.state.partner ? { x: sim.current.state.partner.x, y: sim.current.state.partner.y } : null,
+                multiplayer: room.current ? { role: room.current.role, status: room.current.status, run: room.current.run } : null,
               }),
             },
             { signal: lifecycle.signal },
@@ -1077,8 +1083,10 @@ export default function Home() {
             </p>
             <Button
               className="launch"
+              disabled={isGuest}
               onClick={() => {
                 sim.current.resume();
+                room.current?.broadcast(sim.current.state, true);
                 void audio.current?.unlock();
                 refresh();
               }}

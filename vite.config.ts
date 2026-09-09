@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
 import { defineConfig } from 'vite';
+import { iceDevPlugin } from './scripts/ice-dev-plugin.mjs';
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   '00000000-0000-4000-8000-000000000000';
@@ -16,7 +17,7 @@ export default defineConfig(async () => {
 
   // Vercel serves the exported game directly. It must not load the Workers
   // runtime or depend on Sites hosting configuration.
-  if (staticExport) return { css, plugins: [vinext()] };
+  if (staticExport) return { css, plugins: [iceDevPlugin(), vinext()] };
 
   const { d1, r2 } = JSON.parse(
     readFileSync(new URL('./.openai/hosting.json', import.meta.url), 'utf8'),
@@ -51,6 +52,7 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      iceDevPlugin(),
       vinext(),
       sites(),
       cloudflare({

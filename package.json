@@ -12,9 +12,11 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test": "node --test tests/game.test.mjs",
+    "test": "node --test tests/game.test.mjs tests/ice.test.mjs",
+    "test:multiplayer": "node scripts/test-multiplayer.mjs",
+    "test:multiplayer:relay": "node scripts/test-multiplayer.mjs --relay",
     "typecheck": "tsc --noEmit",
-    "lint:game": "oxlint app lib/game components/coop-lobby.tsx"
+    "lint:game": "oxlint app lib/game lib/network lib/server api components/coop-lobby.tsx"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -43,6 +45,7 @@
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
     "@openai/sites-vite-plugin": "0.2.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -50,6 +53,7 @@
     "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "node-turn": "^0.0.6",
     "oxfmt": "0.61.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",

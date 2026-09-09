@@ -5,13 +5,14 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { EventEmitter } from 'node:events';
 
 // Compile the pure game modules without needing a browser or a test framework.
 const directory = await mkdtemp(join(tmpdir(), 'voidbreaker-tests-'));
 for (const name of ['types','content','simulation','multiplayer']) {
   const source = await readFile(new URL(`../lib/game/${name}.ts`, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
-  await writeFile(join(directory, `${name}.mjs`), outputText.replace(/from '(\.\/[^']+)'/g, "from '$1.mjs'"));
+  await writeFile(join(directory, `${name}.mjs`), outputText.replace(/from '(\.\/[^']+)'/g, "from '$1.mjs'").replace('../network/ice.mjs', pathToFileURL(resolve('lib/network/ice.mjs')).href));
 }
 const { Simulation, loadSave } = await import(pathToFileURL(join(directory,'simulation.mjs')));
 const { freshSave, UPGRADES } = await import(pathToFileURL(join(directory,'content.mjs')));
@@ -57,4 +58,79 @@ test('two-client protocol synchronizes runs, pauses, rematches and one-shot inpu
   guest.requestPause();assert.equal(s.state.phase,'paused');host.broadcast(s.state,true);assert.equal(guestState.phase,'paused');
   host.begin();s.resume();host.broadcast(s.state,true);assert.equal(newRuns,2);assert.equal(host.consume().dash,false);
   host.lastInput=Date.now()-500;assert.equal(host.consume().x,0);
+});
+
+const fakeConnection = () => Object.assign(new EventEmitter(), {
+  open: false, metadata: { protocol: 2 }, send() {},
+  close() { this.open = false; this.emit('close'); },
+});
+const fakePeer = () => Object.assign(new EventEmitter(), {
+  destroyed: false, disconnected: false, connects: 0,
+  connect() { this.connects++; return fakeConnection(); },
+  reconnect() { this.disconnected = false; this.emit('open'); },
+  destroy() { this.destroyed = true; },
+});
+const room = () => new Multiplayer({ change() {}, snapshot() {}, pause() {}, save: freshSave });
+
+test('signaling reopen preserves active rooms on both sides without duplicate channels', () => {
+  for (const role of ['host', 'guest']) {
+    const r = room(), peer = fakePeer(); r.role = role;
+    try {
+      r.connectPeer(peer); peer.emit('open');
+      if (role === 'host') peer.emit('connection', fakeConnection());
+      const connection = r.connection;
+      connection.open = true; connection.emit('open');
+      connection.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+      r.begin(); const run = r.run;
+      peer.emit('error', { type: 'network' }); peer.emit('open');
+      assert.equal(r.status, 'connected'); assert.equal(r.connection, connection);
+      assert.equal(r.run, run); assert.equal(peer.connects, role === 'host' ? 0 : 1);
+    } finally { r.dispose(); }
+  }
+});
+
+test('failed and expired handshakes release the host slot; stale events cannot evict a new guest', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const r = room(), peer = fakePeer();
+  try {
+    r.connectPeer(peer); peer.emit('open');
+    const failed = fakeConnection(); peer.emit('connection', failed);
+    t.mock.timers.tick(20001);
+    assert.equal(r.connection, undefined); assert.equal(r.status, 'waiting');
+    const replacement = fakeConnection(); peer.emit('connection', replacement);
+    replacement.open = true; replacement.emit('open');
+    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    failed.emit('close'); failed.emit('data', { type: 'reject', message: 'stale' });
+    assert.equal(r.status, 'connected'); assert.equal(r.connection, replacement);
+    replacement.close(); assert.equal(r.status, 'waiting'); assert.equal(r.remoteSave, null);
+  } finally { r.dispose(); }
+});
+
+test('asynchronous serialization preserves dash/pulse; focus loss immediately sends neutral controls', async () => {
+  const r = room(), sent = []; r.role = 'guest'; r.status = 'connected'; r.begin();
+  r.connection = { open: true, async send(data) { await Promise.resolve(); sent.push(structuredClone(data)); }, close() {} };
+  try {
+    r.sentAt = -Infinity;
+    r.submit(input({ x: 1, dash: true, pulse: true }), false);
+    await Promise.resolve();
+    assert.equal(sent[0].input.dash, true); assert.equal(sent[0].input.pulse, true);
+    r.releaseInput(); await Promise.resolve();
+    assert.deepEqual(sent[1].input, neutralInput()); assert.ok(sent[1].seq > sent[0].seq);
+  } finally { r.dispose(); }
+});
+
+test('a synchronous hello send failure does not leave an extra heartbeat running', t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const r = room(), peer = fakePeer();
+  try {
+    r.connectPeer(peer); peer.emit('open');
+    const failed = fakeConnection(); failed.send = () => { throw new Error('Closed channel'); };
+    peer.emit('connection', failed); failed.open = true; failed.emit('open');
+    assert.equal(r.status, 'waiting');
+    const replacement = fakeConnection(); let pings = 0;
+    replacement.send = data => { if (data.type === 'ping') pings++; };
+    peer.emit('connection', replacement); replacement.open = true; replacement.emit('open');
+    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    t.mock.timers.tick(2000); assert.equal(pings, 1);
+  } finally { r.dispose(); }
 });
