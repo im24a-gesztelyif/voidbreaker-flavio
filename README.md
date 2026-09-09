@@ -23,7 +23,7 @@ Open the local URL printed by the server. For another device on the same network
 
 Both pilots move, shoot, dash, and use EMP independently. Experience, upgrades, scrap, and score are shared; enemy health scales to the squad. The commander selects shared upgrades, buys station supplies, resumes paused runs, and starts rematches. Either pilot can pause. A downed ship returns with at least half hull when the surviving pilot clears a wave. The run ends when both ships are down. Completed runs award progression in each pilot's own browser.
 
-Keep both tabs open. Losing the connection stops the run and offers a return to the hangar. There is no host migration or mid-run reconnection.
+Keep both tabs open. Switching focus between visible co-op windows clears held controls without pausing; hiding a game tab pauses the shared run. The commander resumes it. Brief signaling outages reconnect without stopping an established game. A lost gameplay connection stops the run and offers a return to the hangar, within about 32 seconds for an abruptly closed browser. Guests can leave and rejoin the same lobby before launch. There is no host migration or mid-run reconnection.
 
 ## Controls
 
@@ -44,7 +44,9 @@ Graphics, sound, volume, and screen shake are adjustable in Settings. Turn off b
 
 The commander runs one authoritative 60 Hz simulation. The wingmate sends validated inputs at up to 30 Hz; snapshots arrive at up to 15 Hz. Reliable binary WebRTC messages support chunking, with snapshot backpressure and visual smoothing. Run IDs, input sequence numbers, single-use ability flags, a 400 ms input timeout, and connection heartbeats prevent stale controls and old-run actions.
 
-Connections use [PeerJS](https://peerjs.com/client/api/peer) and its default public signaling/ICE configuration. There is no application database, account requirement, or custom multiplayer server. The signaling service and a network that permits WebRTC are required. Some restrictive networks may need a separately operated TURN service; cross-network connectivity is not guaranteed. Room codes are invite secrets, not an authenticated identity system.
+Connections use [PeerJS](https://peerjs.com/client/api/peer) for public signaling, with explicit STUN servers and configurable TURN relays. PeerJS 1.5.5's bundled TURN hostnames had no DNS address records during the September 2026 investigation; relying on them allowed local tests to pass while remote players failed. A working TURN provider is necessary for players whose networks cannot connect directly. The game fetches ICE configuration from `/api/ice` before connecting, and shows a setup notice when a relay is unavailable. Room codes are invite secrets, not an authenticated identity system.
+
+Vercel runs only the credential endpoint; it does not host a persistent game server. The commander owns the simulation, and encrypted WebRTC data travels directly or through the configured TURN service. Provider admin keys stay in the server environment. The endpoint returns only the client credentials needed by WebRTC.
 
 ## Checks
 
@@ -53,9 +55,13 @@ npm test
 npm run typecheck
 npm run lint:game
 npm run build
+npm run test:multiplayer
+npm run test:multiplayer:relay
 ```
 
-The tests cover deterministic simulation, firing cadence, independent co-op movement and weapons, damage, revivals, shared progression, stations, all sector bosses, rewards, save recovery, and the two-client message protocol through an in-memory transport. They do not substitute for an end-to-end WebRTC test between physical devices. Full-repository `npm run lint` also includes existing issues in the supplied UI component catalog; `lint:game` checks the game source and co-op UI.
+The unit tests cover simulation, co-op protocol, signaling recovery, failed handshakes, asynchronous ability serialization, and credential handling. Browser tests build the Vercel export and use two isolated Chromium contexts with real PeerJS signaling and WebRTC. They exercise lobby rejoining, launch, both pilots' movement, dash, pause/resume, signaling interruption, and disconnect handling. `test:multiplayer:relay` starts an authenticated TURN fixture bound only to loopback, forces both browsers through it, and asserts the selected ICE candidates are relays. This verifies the relay transport and credential endpoint without requiring paid provider credentials; it does not verify a production provider's availability.
+
+Install the browser once with `npx playwright install chromium`. On Windows, an installed Edge can be used instead: `$env:E2E_BROWSER_CHANNEL = 'msedge'`. Browser tests require internet access to PeerJS signaling. Full-repository `npm run lint` includes existing issues in the supplied UI catalog; `lint:game` checks the game and multiplayer source.
 
 ## Hosting
 
@@ -69,10 +75,36 @@ To reproduce the Vercel build locally:
 npm run build:vercel
 ```
 
-The build exports the game to `dist/client/index.html`, with its JavaScript, styles, fonts, and other public assets. It does not require a Cloudflare Worker or Sites account. Solo gameplay, browser saves, and PeerJS co-op run in the browser as before; invite links use the deployed Vercel address. No multiplayer environment variables are required.
+The build exports the game to `dist/client/index.html`, with JavaScript, styles, fonts, and public assets. Vercel also deploys the root `api/ice.mjs` as a Node function. It does not require a Cloudflare Worker or Sites account. Invite links use the deployed Vercel address.
+
+### Required setup for reliable cross-network multiplayer on Vercel
+
+Configure **one** TURN provider in **Vercel → Project → Settings → Environment Variables**, for Production and any Preview environment you intend to test:
+
+| Provider | Server environment variables |
+| --- | --- |
+| Cloudflare Realtime TURN | `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` from a TURN key |
+| Metered / OpenRelay | `TURN_CREDENTIALS_URL`: the complete HTTPS credentials URL supplied by your provider, including its API key |
+| Your own TURN server | `TURN_ICE_SERVERS`: JSON array containing `urls`, `username`, and `credential` for limited TURN client credentials |
+
+For Cloudflare, [create a TURN key](https://developers.cloudflare.com/realtime/turn/generate-credentials/); the endpoint generates client credentials valid for two hours. Create a fresh room after a long idle session. For Metered, follow its [OpenRelay setup](https://www.metered.ca/tools/openrelay/). Prefer a provider offering TURN over TLS on port 443 for restricted networks. The service's quota and network availability still apply.
+
+Do **not** prefix admin secrets with `NEXT_PUBLIC_` or `VITE_`, or commit them. `.env.example` documents the fields; for local `npm run dev`, copy it to ignored `.env.local` and fill in your provider. In a public deployment, use provider spending/quota controls and a Vercel Firewall rate-limit rule on `/api/ice`; this intentionally anonymous game's origin checks are not authentication.
+
+Redeploy after configuring the variables. On the deployed site, `/api/ice` should return `relayAvailable: true`; `false` with `issue: "not-configured"` means setup is missing, and `issue: "unavailable"` means the configuration or provider request failed. Without TURN, solo and direct peer connections can still work, but remote multiplayer is not fully configured.
+
+To verify the actual deployment (PowerShell):
+
+```powershell
+$env:E2E_BASE_URL = 'https://YOUR-PROJECT.vercel.app'
+$env:E2E_BROWSER_CHANNEL = 'msedge' # optional, if Edge is installed
+npm run test:multiplayer:relay
+```
+
+With `E2E_BASE_URL` set, the test uses that deployment and its real relay provider. It does not start the local TURN fixture or replace the deployment's ICE configuration. No deployed URL or provider credentials were available during the local verification.
 
 After pushing a change, deploy the new commit in Vercel. Redeploying an older commit will reuse its old configuration.
 
 ### Sites / Cloudflare
 
-`npm run dev`, `npm run build`, and `npm start` retain the original Sites / Cloudflare workflow outside Vercel. The existing Sites project previously returned `project_not_found` to the connected account. That account-access issue is separate from Vercel deployment.
+`npm run dev`, `npm run build`, and `npm start` retain the original Sites / Cloudflare workflow outside Vercel. The Vite development server serves `/api/ice` locally. A production host other than Vercel needs to expose the same credential endpoint to use TURN; the static client falls back to direct connections if it is absent. The existing Sites project previously returned `project_not_found` to the connected account. That account-access issue is separate from Vercel deployment.

@@ -72,6 +72,9 @@ export function CoopLobby({
             {room.message}
           </p>
         )}
+        {room?.networkNotice && room.status !== 'connected' && (
+          <output className="connection-error">{room.networkNotice}</output>
+        )}
         {active ? (
           <>
             <div className="room-code">

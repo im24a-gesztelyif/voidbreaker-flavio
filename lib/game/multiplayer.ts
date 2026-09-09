@@ -1,6 +1,11 @@
 import type { Peer, DataConnection } from 'peerjs';
 import { loadSave } from './simulation';
 import type { GameInput, GameState, SaveData } from './types';
+import {
+  STUN_SERVERS,
+  normalizeIceServers,
+  hasRelay,
+} from '../network/ice.mjs';
 
 export type RoomStatus =
   | 'idle'
@@ -70,10 +75,15 @@ export class Multiplayer {
   remoteSave: SaveData | null = null;
   run = '';
   latency = 0;
+  relayAvailable = false;
+  networkNotice = '';
   private peer?: Peer;
   private connection?: DataConnection;
   private timer?: ReturnType<typeof setInterval>;
   private timeout?: ReturnType<typeof setTimeout>;
+  private handshakeTimeout?: ReturnType<typeof setTimeout>;
+  private reconnectTimeout?: ReturnType<typeof setTimeout>;
+  private reconnectDelay = 1000;
   private disposed = false;
   private lastSeen = 0;
   private lastInput = 0;
@@ -111,89 +121,192 @@ export class Multiplayer {
     }
     this.update('connecting');
     try {
-      const { Peer } = await import('peerjs');
+      const [{ Peer }, config] = await Promise.all([
+        import('peerjs'),
+        this.iceConfig(),
+      ]);
       if (this.disposed) return;
-      this.peer = role === 'host' ? new Peer(PREFIX + this.code) : new Peer();
-      this.timeout = setTimeout(
-        () =>
-          this.fail(
-            'Connection timed out. Check the room code and try another network.',
-          ),
-        25000,
+      this.connectPeer(
+        role === 'host'
+          ? new Peer(PREFIX + this.code, { config })
+          : new Peer({ config }),
       );
-      this.peer.on('open', () => {
-        if (role === 'host') {
-          clearTimeout(this.timeout);
-          this.update('waiting');
-        } else
-          this.attach(
-            this.peer!.connect(PREFIX + this.code, {
-              reliable: true,
-              serialization: 'binary',
-              metadata: { protocol: 2 },
-            }),
-          );
-      });
-      this.peer.on('connection', (c) => {
-        if (role !== 'host' || this.connection || c.metadata?.protocol !== 2) {
-          c.on('open', () => {
-            void c.send({
-              type: 'reject',
-              message: 'This room is full or incompatible.',
-            });
-            setTimeout(() => c.close(), 200);
-          });
-          return;
-        }
-        this.attach(c);
-      });
-      this.peer.on('error', (e) =>
-        this.fail(
-          e.type === 'peer-unavailable'
-            ? 'Room not found. Ask the commander to create a room and check the code.'
-            : e.type === 'unavailable-id'
-              ? 'This code is taken. Create a new room.'
-              : 'Unable to connect. Check your connection or try a different network.',
-        ),
-      );
-      this.peer.on('disconnected', () => {
-        if (!this.disposed && this.peer && !this.peer.destroyed)
-          this.peer.reconnect();
-      });
     } catch {
       this.fail(
         'Multiplayer could not start. Use a browser with WebRTC support.',
       );
     }
   }
+  private async iceConfig(): Promise<RTCConfiguration> {
+    let iceServers: RTCIceServer[] = STUN_SERVERS;
+    try {
+      const response = await fetch('/api/ice', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(9000),
+      });
+      if (response.ok) {
+        const body = (await response.json()) as { iceServers?: unknown };
+        const configured = normalizeIceServers(body.iceServers);
+        if (configured.length) iceServers = configured;
+      }
+    } catch {
+      /* Static hosts can still make direct connections. */
+    }
+    this.relayAvailable = hasRelay(iceServers);
+    this.networkNotice = this.relayAvailable
+      ? ''
+      : 'This deployment has no available connection relay. Some networks cannot join until the site owner completes the multiplayer setup in the README.';
+    return { iceServers };
+  }
+  private connectPeer(peer: Peer) {
+    this.peer = peer;
+    this.timeout = setTimeout(
+      () =>
+        this.fail(
+          'Connection timed out. Check the room code and try another network.',
+        ),
+      25000,
+    );
+    peer.on('open', () => {
+      if (this.disposed || this.status === 'error') return;
+      clearTimeout(this.timeout);
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = undefined;
+      this.reconnectDelay = 1000;
+      // Signaling can reconnect while the independent WebRTC channel lives on.
+      // Never replace that channel or reset an already connected room.
+      if (this.connection) return;
+      if (this.role === 'host') {
+        this.update('waiting');
+      } else {
+        try {
+          this.attach(
+            peer.connect(PREFIX + this.code, {
+              reliable: true,
+              serialization: 'binary',
+              metadata: { protocol: 2 },
+            }),
+          );
+        } catch {
+          this.fail(
+            'The room connection could not start. Ask the site owner to check the relay configuration.',
+          );
+        }
+      }
+    });
+    peer.on('connection', (c) => {
+      if (this.disposed || this.status === 'error') {
+        c.close();
+        return;
+      }
+      if (
+        this.role !== 'host' ||
+        this.connection ||
+        this.run ||
+        c.metadata?.protocol !== 2
+      ) {
+        const cleanup = setTimeout(() => c.close(), 20000);
+        c.on('error', () => {
+          clearTimeout(cleanup);
+          c.close();
+        });
+        c.on('close', () => clearTimeout(cleanup));
+        c.on('open', () => {
+          Promise.resolve(
+            c.send({
+              type: 'reject',
+              message: 'This room is full or incompatible.',
+            }),
+          ).catch(() => c.close());
+          setTimeout(() => c.close(), 200);
+        });
+        return;
+      }
+      this.attach(c);
+    });
+    peer.on('error', (e) => {
+      if (['network', 'socket-error', 'socket-closed'].includes(e.type)) {
+        this.reconnect();
+        return;
+      }
+      // PeerJS reports negotiation errors on the peer as well as the channel.
+      if (e.type === 'webrtc' && this.connection) {
+        if (!this.connection.open) this.connectionFailed(this.connection);
+        return;
+      }
+      this.fail(
+        e.type === 'peer-unavailable'
+          ? 'Room not found. Ask the commander to create a room and check the code.'
+          : e.type === 'unavailable-id'
+            ? 'This code is taken. Create a new room.'
+            : 'Unable to connect. Check your connection or try a different network.',
+      );
+    });
+    peer.on('disconnected', () => this.reconnect());
+  }
+  private reconnect() {
+    if (this.disposed || this.status === 'error' || this.reconnectTimeout)
+      return;
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = undefined;
+      if (this.peer?.disconnected && !this.peer.destroyed) {
+        try {
+          this.peer.reconnect();
+        } catch {
+          /* Retry while data channels stay alive. */
+        }
+        this.reconnectDelay = Math.min(10000, this.reconnectDelay * 2);
+        this.reconnect();
+      }
+    }, this.reconnectDelay);
+  }
   private attach(c: DataConnection) {
     this.connection = c;
+    this.handshakeTimeout = setTimeout(() => this.connectionFailed(c), 20000);
     c.on('open', () => {
-      clearTimeout(this.timeout);
+      if (this.connection !== c || this.disposed) return;
       this.lastSeen = Date.now();
       this.send({ type: 'hello', protocol: 2, save: this.callbacks.save() });
+      if (this.connection !== c) return;
       this.timer = setInterval(() => {
-        if (Date.now() - this.lastSeen > 12000) {
-          this.fail(
-            'Your wingmate disconnected. Return to the hangar to regroup.',
-          );
+        if (Date.now() - this.lastSeen > 30000) {
+          this.connectionFailed(c);
           return;
         }
         this.send({ type: 'ping', time: Date.now() });
       }, 2000);
     });
-    c.on('data', (data) => this.receive(data));
-    c.on('close', () => {
-      if (!this.disposed && this.status !== 'error')
-        this.fail(
-          'Your wingmate left the room. Return to the hangar to regroup.',
-        );
+    c.on('data', (data) => {
+      if (this.connection === c) this.receive(data);
     });
-    c.on('error', () =>
+    c.on('close', () => this.connectionFailed(c));
+    c.on('error', () => this.connectionFailed(c));
+  }
+  private connectionFailed(c: DataConnection) {
+    if (this.disposed || this.connection !== c || this.status === 'error')
+      return;
+    if (this.role === 'host' && !this.run) {
+      // A cancelled/failed join must not reserve the only wingmate slot forever.
+      this.releaseConnection();
+      this.remoteSave = null;
+      this.update(
+        'waiting',
+        'Your wingmate disconnected. They can join again using this code.',
+      );
+    } else {
       this.fail(
-        'The connection was interrupted. Return to the hangar and reconnect.',
-      ),
-    );
+        !this.run && !this.relayAvailable
+          ? 'Could not reach this room. This deployment needs a TURN relay for connections between restricted networks. Ask the site owner to complete the multiplayer setup in the README.'
+          : 'The connection was interrupted. Return to the hangar and reconnect.',
+      );
+    }
+  }
+  private releaseConnection() {
+    clearInterval(this.timer);
+    clearTimeout(this.handshakeTimeout);
+    const c = this.connection;
+    this.connection = undefined;
+    c?.close();
   }
   private receive(data: unknown) {
     if (!data || typeof data !== 'object' || this.disposed) return;
@@ -224,6 +337,7 @@ export class Multiplayer {
     }
     if (m.type === 'hello' && m.protocol === 2) {
       if (this.run) return;
+      clearTimeout(this.handshakeTimeout);
       this.remoteSave = loadSave(JSON.stringify(m.save));
       this.update('connected');
       return;
@@ -269,17 +383,13 @@ export class Multiplayer {
     }
   }
   send(data: unknown) {
-    if (this.connection?.open) {
+    const connection = this.connection;
+    if (connection?.open) {
       try {
-        const sent = this.connection.send(data);
-        if (sent)
-          void sent.catch(() =>
-            this.fail(
-              'The connection was interrupted. Reconnect from the hangar.',
-            ),
-          );
+        const sent = connection.send(data);
+        if (sent) void sent.catch(() => this.connectionFailed(connection));
       } catch {
-        this.fail('The connection was interrupted. Reconnect from the hangar.');
+        this.connectionFailed(connection);
       }
     }
   }
@@ -320,7 +430,7 @@ export class Multiplayer {
       type: 'input',
       run: this.run,
       seq: ++this.sequence,
-      input: this.pending,
+      input: { ...this.pending },
       autoFire,
     });
     this.pending.dash = false;
@@ -336,19 +446,31 @@ export class Multiplayer {
   requestPause() {
     this.send({ type: 'pause', run: this.run });
   }
+  releaseInput() {
+    this.pending = neutralInput();
+    if (this.role === 'guest' && this.run && this.status === 'connected')
+      this.send({
+        type: 'input',
+        run: this.run,
+        seq: ++this.sequence,
+        input: neutralInput(),
+      });
+  }
   private fail(message: string) {
-    if (this.disposed) return;
-    clearInterval(this.timer);
+    if (this.disposed || this.status === 'error') return;
     clearTimeout(this.timeout);
+    clearTimeout(this.reconnectTimeout);
+    this.releaseConnection();
     this.input = neutralInput();
     this.update('error', message);
+    this.peer?.destroy();
     this.callbacks.pause();
   }
   dispose() {
     this.disposed = true;
-    clearInterval(this.timer);
     clearTimeout(this.timeout);
-    this.connection?.close();
+    clearTimeout(this.reconnectTimeout);
+    this.releaseConnection();
     this.peer?.destroy();
   }
 }
