@@ -89,7 +89,6 @@ export default function Home() {
   const room = useRef<Multiplayer | null>(null);
   const panelRef = useRef(panel);
   panelRef.current = panel;
-  const coarse = useRef(false);
   const [inviteCode, setInviteCode] = useState('');
   const isGuest = room.current?.role === 'guest' && !!room.current.run;
   const pauseGame = () => {
@@ -191,7 +190,6 @@ export default function Home() {
     refresh();
   };
   useEffect(() => {
-    coarse.current = matchMedia('(pointer: coarse)').matches;
     const code = new URL(location.href).searchParams.get('room');
     if (code) {
       setInviteCode(code);
@@ -289,10 +287,7 @@ export default function Home() {
     };
     const keyup = (e: KeyboardEvent) => keys.current.delete(e.code);
     const move = (e: PointerEvent) => {
-      if (e.pointerType === 'touch') {
-        coarse.current = true;
-        return;
-      }
+      if (e.pointerType === 'touch') return;
       mouse.current = {
         ...mouse.current,
         x: e.clientX,
@@ -344,16 +339,6 @@ export default function Home() {
       let aim = { x: s.player.x, y: s.player.y - 20 };
       if (mouse.current.moved && renderer.current)
         aim = renderer.current.aim(mouse.current.x, mouse.current.y);
-      if (coarse.current || touch.current.active) {
-        let nearest = Infinity;
-        for (const e of s.enemies) {
-          const d = Math.hypot(e.x - s.player.x, e.y - s.player.y);
-          if (d < nearest) {
-            nearest = d;
-            aim = { x: e.x, y: e.y };
-          }
-        }
-      }
       const input: GameInput = {
         x:
           touch.current.x +

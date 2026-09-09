@@ -79,12 +79,16 @@ The build exports the game to `dist/client/index.html`, with JavaScript, styles,
 
 ### Required setup for reliable cross-network multiplayer on Vercel
 
+**You can keep hosting on Vercel Hobby and use a free relay plan.** TURN is the name of the connection-relay protocol, not a paid subscription. Direct multiplayer connections work without a relay; a relay is needed when the players' networks cannot connect directly.
+
+For the free setup, create a [Metered / OpenRelay account](https://www.metered.ca/tools/openrelay/), obtain its TURN credentials URL, and add that URL as `TURN_CREDENTIALS_URL` in your Vercel project's environment variables. Redeploy the game. OpenRelay currently advertises 20 GB of free relay traffic per month; its [free-tier documentation](https://www.metered.ca/tools/openrelay/webrtc-signaling-server/) states that no credit card is required. Stay on the free plan and within its limits. This project already supports that credentials URL; no networking rewrite is needed.
+
 Configure **one** TURN provider in **Vercel → Project → Settings → Environment Variables**, for Production and any Preview environment you intend to test:
 
 | Provider | Server environment variables |
 | --- | --- |
-| Cloudflare Realtime TURN | `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` from a TURN key |
-| Metered / OpenRelay | `TURN_CREDENTIALS_URL`: the complete HTTPS credentials URL supplied by your provider, including its API key |
+| Metered / OpenRelay (free allowance available) | `TURN_CREDENTIALS_URL`: the complete HTTPS credentials URL supplied by your provider, including its API key |
+| Cloudflare Realtime TURN (alternative) | `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` from a TURN key |
 | Your own TURN server | `TURN_ICE_SERVERS`: JSON array containing `urls`, `username`, and `credential` for limited TURN client credentials |
 
 For Cloudflare, [create a TURN key](https://developers.cloudflare.com/realtime/turn/generate-credentials/); the endpoint generates client credentials valid for two hours. Create a fresh room after a long idle session. For Metered, follow its [OpenRelay setup](https://www.metered.ca/tools/openrelay/). Prefer a provider offering TURN over TLS on port 443 for restricted networks. The service's quota and network availability still apply.

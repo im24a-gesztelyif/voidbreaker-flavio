@@ -411,7 +411,7 @@ export class Multiplayer {
     const now = performance.now();
     if (
       !force &&
-      (now - this.snapshotAt < 66 ||
+      (now - this.snapshotAt < 25 ||
         (this.connection?.dataChannel?.bufferedAmount || 0) > 128000)
     )
       return;
@@ -424,7 +424,7 @@ export class Multiplayer {
       dash: input.dash || this.pending.dash,
       pulse: input.pulse || this.pending.pulse,
     };
-    if (performance.now() - this.sentAt < 33) return;
+    if (performance.now() - this.sentAt < 25) return;
     this.sentAt = performance.now();
     this.send({
       type: 'input',

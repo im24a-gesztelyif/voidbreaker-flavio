@@ -43,6 +43,13 @@ test('boss kills progress through stations and end in victory', () => {const s=f
 test('rewards include achievement bonuses and are awarded only once', () => {const s=flight();s.state.phase='defeat';const save=freshSave();const result=s.finish(save);assert.equal(result.earned,20);assert.equal(result.save.shards,20);assert.equal(s.finish(result.save).earned,0);});
 test('save loading rejects corrupted values without losing valid selections', () => {const save=loadSave(JSON.stringify({version:1,ship:'wraith',shards:-20,meta:{hull:999},settings:{volume:9}}));assert.equal(save.ship,'wraith');assert.equal(save.shards,0);assert.equal(save.meta.hull,5);assert.equal(save.settings.volume,1);assert.deepEqual(loadSave('broken'),freshSave());});
 test('network input validation rejects non-finite values and clamps movement', () => {assert.equal(cleanInput(input({x:Infinity})),null);assert.equal(cleanInput({}),null);assert.equal(cleanInput(input({x:999})).x,1);});
+test('pointer aim never auto-locks to a target and sync refresh stays at 40Hz', async () => {
+  const page = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
+  const multiplayer = await readFile(new URL('../lib/game/multiplayer.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /coarse\.current\s*\|\|\s*touch\.current\.active/);
+  assert.match(multiplayer, /<\s*25/);
+  assert.doesNotMatch(multiplayer, /<\s*66|<\s*33/);
+});
 test('guest camera view never mutates the authoritative state', () => {const s=flight(true);const view=guestView(s.state);assert.equal(view.ship,'wraith');assert.equal(view.partnerShip,'kestrel');assert.equal(s.state.ship,'kestrel');assert.equal(view.player,s.state.partner);});
 test('two-client protocol synchronizes runs, pauses, rematches and one-shot inputs', () => {
   const s=flight(true);let guestState,newRuns=0;
