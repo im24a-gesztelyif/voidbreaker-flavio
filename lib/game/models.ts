@@ -2,7 +2,8 @@ import * as THREE from 'three';
 
 /** Procedural hard-surface models. Forward is -Z, dorsal/up is +Y. */
 export type ShipKind = 'kestrel' | 'wraith' | 'bastion';
-export type EnemyKind = 'drone' | 'striker' | 'gunner' | 'bomber' | 'warden' | 'swarm' | 'boss';
+import type { EnemyKind } from './types';
+export type { EnemyKind } from './types';
 
 const geometries = new Map<string, THREE.BufferGeometry>();
 const materials = new Map<string, THREE.MeshStandardMaterial>();
@@ -341,6 +342,30 @@ function buildEnemy(kind: Exclude<EnemyKind, 'boss'>, sector: number): THREE.Gro
     reactor(root, 0.22, 0.25, accent);
     plate(root, 'bomber nose armor', [[0,-0.72],[0.27,-0.35],[0.22,-0.13],[-0.22,-0.13],[-0.27,-0.35]], 0.08, C.ivory, 0.25);
     box(root, 'bomber nose slit', accent, 0, 0.31, -0.33, 0.26, 0.025, 0.065, 1.8);
+  } else if (kind === 'lancer') {
+    plate(root, 'needle split hull', [[0,-1.5],[.3,-.3],[.7,.8],[.2,.6],[0,.2],[-.2,.6],[-.7,.8],[-.3,-.3]], .22, C.dark);
+    for (const side of [-1,1]) barrel(root, side*.23, .1, -.7, 1.7, .07, '#ffe08a');
+    reactor(root, .16, .2, '#ffe08a');
+    engine(root, 0, 0, .6, .15, '#ffe08a', .4);
+  } else if (kind === 'brood') {
+    plate(root, 'brood central ark', [[0,-1.9],[.7,-1],[.7,1.3],[0,1.8],[-.7,1.3],[-.7,-1]], .5, C.armor);
+    for (const side of [-1,1]) for (let i=0;i<3;i++) {
+      part(root, 'glowing brood pod', crystalGeometry(), material('#a5f789',1.3), [side*(1.1-i*.12),.1,-.9+i*.8], [.45,.3,.5]);
+      box(root, 'pod strut', C.edge, side*.6, 0, -.9+i*.8, 1.1,.15,.18);
+    }
+    engine(root, 0, 0, 1.5, .28, '#a5f789', .6);
+  } else if (kind === 'manta') {
+    plate(root, 'veil crescent', [[0,-.7],[.5,-.4],[1.8,-1],[1.5,.4],[.4,.8],[0,1.4],[-.4,.8],[-1.5,.4],[-1.8,-1],[-.5,-.4]], .16, C.armor);
+    for (const side of [-1,1]) { barrel(root,side*1.2,.05,-.2,.7,.08,'#82d8ff'); engine(root,side*.5,0,.7,.11,'#82d8ff',.5); }
+    reactor(root,.22,.2,'#82d8ff');
+  } else if (kind === 'anchor') {
+    ring(root,1.2,.1,'#f795d9',.8,.1);
+    for (let i=0;i<4;i++) {
+      const arm=new THREE.Group(); arm.rotation.y=i*Math.PI/2; root.add(arm);
+      plate(arm,'rift anchor prong',[[-.2,-.4],[-.35,-1.4],[0,-1.7],[.35,-1.4],[.2,-.4]],.3,C.dark);
+      box(arm,'anchor glow','#f795d9',0,.2,-1.1,.1,.1,.5,2);
+    }
+    reactor(root,.4,.35,'#f795d9');
   } else {
     plate(root, 'warden hexagonal hull', [[0,-1.02],[0.78,-0.52],[0.78,0.5],[0,0.93],[-0.78,0.5],[-0.78,-0.52]], 0.28, C.armor);
     for (const s of [-1,1]) {
@@ -358,10 +383,10 @@ function buildEnemy(kind: Exclude<EnemyKind, 'boss'>, sector: number): THREE.Gro
 }
 
 function buildBoss(sector: number): THREE.Group {
-  const variant = ((sector - 1) % 5 + 5) % 5;
+  const variant = ((sector - 1) % 6 + 6) % 6;
   const root = new THREE.Group();
-  const accent = [C.hostile, C.violet, C.amber, C.blue, C.pink][variant];
-  root.name = ['HELIX / siege carrier', 'SERAPH / triune hunter', 'MONARCH / dreadnought', 'ORRERY / machine cathedral', 'ECLIPSE / void crown'][variant];
+  const accent = [C.hostile, C.violet, C.amber, C.blue, C.pink, '#b1ff79'][variant];
+  root.name = ['HELIX / siege carrier', 'SERAPH / triune hunter', 'MONARCH / dreadnought', 'ORRERY / machine cathedral', 'ECLIPSE / void crown', 'CHRONOVORE / time eater'][variant];
   root.userData.kind = 'boss';
   root.userData.sector = sector;
   root.userData.accent = accent;
@@ -432,7 +457,7 @@ function buildBoss(sector: number): THREE.Group {
       barrel(arm, 0, 0.24, -4.03, 1.2, 0.145, accent);
     }
     reactor(root, 0.99, 0.65, accent);
-  } else {
+  } else if (variant === 4) {
     ring(root, 3.67, 0.18, accent, -0.23, 0.17);
     const tilted = ring(root, 2.74, 0.13, accent, 0.34, 0.51);
     tilted.rotation.z = 0.34;
@@ -449,13 +474,24 @@ function buildBoss(sector: number): THREE.Group {
     reactor(root, 0.72, 1.12, accent);
     ring(root, 1.47, 0.075, accent, -0.59, 0.83);
   }
+  if (variant === 5) {
+    for (const side of [-1,1]) {
+      const half = new THREE.Group(); half.rotation.y = side === 1 ? 0 : Math.PI; root.add(half);
+      plate(half,'hourglass jaw',[[-.4,-.4],[-2.4,-2.9],[-3.8,-3.1],[-3.2,-4.2],[3.2,-4.2],[3.8,-3.1],[2.4,-2.9],[.4,-.4]],.55,C.dark);
+      for (const x of [-2,0,2]) barrel(half,x,.3,-3.5,1.5,.12,accent);
+      box(half,'time gate',accent,0,.5,-3.7,4.8,.1,.16,2);
+    }
+    reactor(root,.9,.7,accent);
+    ring(root,1.6,.12,accent,1.1,.4);
+    ring(root,2.2,.08,accent,-.7,.8);
+  }
   constrainRadius(root, 5.5);
   return compact(root);
 }
 
 export function createEnemy(kind: EnemyKind, sector = 1): THREE.Group {
   const normalizedSector = Number.isFinite(sector) ? Math.max(1, Math.floor(sector)) : 1;
-  const variant = (normalizedSector - 1) % 5 + 1;
+  const variant = (normalizedSector - 1) % (kind === 'boss' ? 6 : 5) + 1;
   const result = cached(`enemy:${kind}:${variant}`, () => kind === 'boss' ? buildBoss(variant) : buildEnemy(kind, variant));
   result.userData.sector = normalizedSector;
   return result;

@@ -1,6 +1,8 @@
 import type { Peer, DataConnection } from 'peerjs';
+import { SnapshotEncoder, SnapshotDecoder } from './codec';
+import { cleanOptions, defaultOptions } from './rules';
 import { loadSave } from './simulation';
-import type { GameInput, GameState, SaveData } from './types';
+import type { GameInput, GameState, SaveData, RoomOptions, UpgradeId } from './types';
 import {
   STUN_SERVERS,
   normalizeIceServers,
@@ -49,6 +51,12 @@ export function guestView(s: GameState): GameState {
   return {
     ...s,
     player: s.partner,
+    upgrades: s.sharedUpgrades ? s.upgrades : s.partnerUpgrades,
+    partnerUpgrades: s.upgrades,
+    choices: s.sharedUpgrades ? [] : s.partnerChoices,
+    partnerChoices: s.choices,
+    rerolls: s.sharedUpgrades ? 0 : s.partnerRerolls,
+    partnerRerolls: s.rerolls,
     ship: s.partnerShip!,
     weapon: s.partnerWeapon!,
     autoFire: !!s.partnerAutoFire,
@@ -58,7 +66,7 @@ export function guestView(s: GameState): GameState {
     partnerAutoFire: s.autoFire,
   };
 }
-const PREFIX = 'voidbreaker-v2-';
+const PREFIX = 'voidbreaker-v3-';
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const normalizeCode = (value: string) =>
   value
@@ -77,6 +85,10 @@ export class Multiplayer {
   latency = 0;
   relayAvailable = false;
   networkNotice = '';
+  options: RoomOptions = defaultOptions();
+  private encoder = new SnapshotEncoder();
+  private decoder = new SnapshotDecoder();
+  private lastSentInput = '';
   private peer?: Peer;
   private connection?: DataConnection;
   private timer?: ReturnType<typeof setInterval>;
@@ -95,6 +107,7 @@ export class Multiplayer {
   private snapshotAt = 0;
   constructor(
     private callbacks: {
+      choose?: (id: UpgradeId | null, draft: number) => void;
       change: () => void;
       snapshot: (state: GameState, newRun: boolean) => void;
       pause: () => void;
@@ -184,7 +197,7 @@ export class Multiplayer {
             peer.connect(PREFIX + this.code, {
               reliable: true,
               serialization: 'binary',
-              metadata: { protocol: 2 },
+              metadata: { protocol: 3 },
             }),
           );
         } catch {
@@ -203,7 +216,7 @@ export class Multiplayer {
         this.role !== 'host' ||
         this.connection ||
         this.run ||
-        c.metadata?.protocol !== 2
+        c.metadata?.protocol !== 3
       ) {
         const cleanup = setTimeout(() => c.close(), 20000);
         c.on('error', () => {
@@ -266,7 +279,7 @@ export class Multiplayer {
     c.on('open', () => {
       if (this.connection !== c || this.disposed) return;
       this.lastSeen = Date.now();
-      this.send({ type: 'hello', protocol: 2, save: this.callbacks.save() });
+      this.send({ type: 'hello', protocol: 3, save: this.callbacks.save(), ...(this.role === 'host' ? {options: this.options} : {}) });
       if (this.connection !== c) return;
       this.timer = setInterval(() => {
         if (Date.now() - this.lastSeen > 30000) {
@@ -320,7 +333,10 @@ export class Multiplayer {
       seq?: number;
       input?: unknown;
       autoFire?: boolean;
-      state?: GameState;
+      frame?: unknown;
+      options?: unknown;
+      id?: UpgradeId;
+      draft?: number;
     };
     this.lastSeen = Date.now();
     if (m.type === 'reject') {
@@ -335,12 +351,16 @@ export class Multiplayer {
       this.latency = Math.max(0, Date.now() - m.time);
       return;
     }
-    if (m.type === 'hello' && m.protocol === 2) {
+    if (m.type === 'hello' && m.protocol === 3) {
       if (this.run) return;
       clearTimeout(this.handshakeTimeout);
       this.remoteSave = loadSave(JSON.stringify(m.save));
+      if (this.role === 'guest') this.options = cleanOptions(m.options);
       this.update('connected');
       return;
+    }
+    if (m.type === 'options' && this.role === 'guest' && !this.run) {
+      this.options = cleanOptions(m.options); this.callbacks.change(); return;
     }
     if (this.status !== 'connected') return;
     if (this.role === 'host') {
@@ -361,25 +381,17 @@ export class Multiplayer {
         if (typeof m.autoFire === 'boolean' && this.remoteSave)
           this.remoteSave.settings.autoFire = m.autoFire;
       }
+      if ((m.type === 'choose' || m.type === 'reroll') && !this.options.sharedUpgrades && Number.isSafeInteger(m.draft)) {
+        this.callbacks.choose?.(m.type === 'reroll' ? null : m.id!, m.draft!);
+      }
       if (m.type === 'pause') this.callbacks.pause();
-    } else if (
-      m.type === 'state' &&
-      typeof m.run === 'string' &&
-      m.state?.partner &&
-      m.state?.player &&
-      Array.isArray(m.state.enemies) &&
-      m.state.enemies.length <= 100 &&
-      Array.isArray(m.state.bullets) &&
-      m.state.bullets.length <= 700 &&
-      ['playing', 'paused', 'upgrade', 'station', 'victory', 'defeat'].includes(
-        m.state.phase,
-      ) &&
-      m.state.sector >= 0 &&
-      m.state.sector < 3
-    ) {
+    } else if (m.type === 'state' && typeof m.run === 'string' && m.run.length === 32) {
       const newRun = this.run !== m.run;
+      if (newRun) this.decoder.reset();
+      const state = this.decoder.decode(m.frame);
+      if (!state) return;
       this.run = m.run;
-      this.callbacks.snapshot(guestView(m.state as GameState), newRun);
+      this.callbacks.snapshot(guestView(state), newRun);
     }
   }
   send(data: unknown) {
@@ -395,9 +407,20 @@ export class Multiplayer {
   }
   updateLoadout() {
     if (!this.run)
-      this.send({ type: 'hello', protocol: 2, save: this.callbacks.save() });
+      this.send({ type: 'hello', protocol: 3, save: this.callbacks.save() });
+  }
+  configure(options: Partial<RoomOptions>) {
+    if (this.role !== 'host' || this.run) return;
+    this.options = cleanOptions({...this.options, ...options});
+    this.send({type: 'options', options: this.options});
+    this.callbacks.change();
+  }
+  choose(id: UpgradeId | null, draft: number) {
+    this.send({type: id === null ? 'reroll' : 'choose', id, draft, run: this.run});
   }
   begin() {
+    this.encoder.reset();
+    this.snapshotAt = 0;
     this.run = Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) =>
       n.toString(16).padStart(2, '0'),
     ).join('');
@@ -411,12 +434,12 @@ export class Multiplayer {
     const now = performance.now();
     if (
       !force &&
-      (now - this.snapshotAt < 25 ||
-        (this.connection?.dataChannel?.bufferedAmount || 0) > 128000)
+      (now - this.snapshotAt < (state.phase === 'playing' ? 50 : 1000) ||
+        (this.connection?.dataChannel?.bufferedAmount || 0) > 32000)
     )
       return;
     this.snapshotAt = now;
-    this.send({ type: 'state', run: this.run, state: structuredClone(state) });
+    this.send({ type: 'state', run: this.run, frame: this.encoder.encode(state, force) });
   }
   submit(input: GameInput, autoFire: boolean) {
     this.pending = {
@@ -424,7 +447,9 @@ export class Multiplayer {
       dash: input.dash || this.pending.dash,
       pulse: input.pulse || this.pending.pulse,
     };
-    if (performance.now() - this.sentAt < 25) return;
+    const signature = JSON.stringify([Math.round(input.x*100),Math.round(input.y*100),Math.round(input.aimX*10),Math.round(input.aimY*10),input.firing,autoFire]);
+    if (!this.pending.dash && !this.pending.pulse && performance.now() - this.sentAt < (signature === this.lastSentInput ? 100 : 50)) return;
+    this.lastSentInput = signature;
     this.sentAt = performance.now();
     this.send({
       type: 'input',
