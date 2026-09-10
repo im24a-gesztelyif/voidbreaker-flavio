@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+import { DamageFeedback } from './damage-feedback';
+=======
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
 import { BOSS_VARIANTS } from './rules';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -55,6 +59,7 @@ export class SpaceRenderer {
   private observed: ResizeObserver;
   private quality: 'high' | 'low';
   private scratchColor = new THREE.Color();
+  private damageFeedback = new DamageFeedback();
   private time = 0;
   private lastMenu = true;
   private lastSnapshot: GameState | null = null;
@@ -286,10 +291,11 @@ export class SpaceRenderer {
   }
   render(s: GameState, dt: number, shake = true, network = false) {
     this.snapshotAge =
-      this.lastSnapshot === s && network
+      this.lastSnapshot === s && network && s.phase === 'playing'
         ? Math.min(0.09, this.snapshotAge + dt)
         : 0;
     this.lastSnapshot = s;
+    this.damageFeedback.update(s, dt);
     this.time += dt;
     const menu = s.phase === 'menu',
       p = s.player,
@@ -556,6 +562,24 @@ export class SpaceRenderer {
     const ctx = this.labelContext;
     ctx.clearRect(0, 0, this.width, this.height);
     if (s.phase === 'menu') return;
+    const feedback = this.damageFeedback;
+    if (feedback.shield > 0 || feedback.hull > 0) {
+      const hull = feedback.hull > 0;
+      const alpha = hull ? feedback.hull / .45 : feedback.shield / .35;
+      const color = hull ? '255,125,83' : '103,211,255';
+      ctx.save();
+      const gradient = ctx.createRadialGradient(this.width/2,this.height/2,this.height*.3,this.width/2,this.height/2,Math.hypot(this.width,this.height)/2);
+      gradient.addColorStop(0,'transparent');gradient.addColorStop(1,`rgba(${color},${alpha*.2})`);
+      ctx.fillStyle=gradient;ctx.fillRect(0,0,this.width,this.height);
+      const pos=this.project(s.player.x,s.player.y);
+      ctx.globalAlpha=alpha;ctx.strokeStyle=`rgb(${color})`;ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2;
+      ctx.beginPath();
+      if(hull) {
+        for(let i=0;i<4;i++) { const a=i*Math.PI/2+Math.PI/4;ctx.moveTo(pos.x+Math.cos(a-.18)*30,pos.y+Math.sin(a-.18)*30);ctx.lineTo(pos.x+Math.cos(a)*36,pos.y+Math.sin(a)*36);ctx.lineTo(pos.x+Math.cos(a+.18)*30,pos.y+Math.sin(a+.18)*30); }
+      } else ctx.arc(pos.x,pos.y,30+(1-alpha)*12,0,TAU);
+      ctx.stroke();ctx.font='bold 11px monospace';ctx.textAlign='center';ctx.fillText(hull?'HULL HIT':'SHIELD HIT',pos.x,pos.y+54);
+      ctx.restore();
+    }
     if (s.partner) {
       const pos = this.project(s.partner.x, s.partner.y);
       ctx.font = 'bold 12px monospace';

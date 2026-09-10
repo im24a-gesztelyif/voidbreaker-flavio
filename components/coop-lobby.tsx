@@ -15,6 +15,7 @@ export function CoopLobby({
   ready,
   save,
   initialCode,
+  loadout,
   connect,
   leave,
   close,
@@ -24,6 +25,7 @@ export function CoopLobby({
   room: Multiplayer | null;
   save: SaveData;
   initialCode: string;
+  loadout: React.ReactNode;
   connect: (role: 'host' | 'guest', code?: string) => void;
   leave: () => void;
   close: () => void;
@@ -68,6 +70,7 @@ export function CoopLobby({
         <p>
           Take on the campaign or fly into endless space. The commander sets the rules.
         </p>
+        <details className="lobby-loadout"><summary>YOUR SHIP & WEAPON</summary>{loadout}</details>
         {room?.message && (
           <p className="connection-error" role="alert">
             {room.message}

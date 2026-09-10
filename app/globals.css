@@ -1612,7 +1612,7 @@ body {
   }
   .game-shell:not(.in-game) .space-view {
     position: absolute;
-    height: 640px;
+    height: 100%;
   }
   .hangar-copy {
     position: relative;
@@ -2003,3 +2003,30 @@ body {
  .boss-hud { left:29%; right:26%; }
  .boss-hud span { font-size:10px; }
 }
+<<<<<<< HEAD
+.flight-setup { width:100%; margin:24px 0; text-align:left; }
+.flight-setup .ship-list { width:100%; }
+.flight-setup .hangar-bottom-row { flex-wrap:wrap; gap:12px; }
+.flight-setup .weapon-select { flex-wrap:wrap; }
+.flight-setup .controls-hint { display:none; }
+.solo-setup .launch { margin-top:8px; }
+.lobby-loadout { margin-top:20px; text-align:left; }
+.lobby-loadout summary { cursor:pointer; padding:14px; border:1px solid #314650; border-radius:6px; font-size:12px; color:#c8dcdf; }
+.lobby-loadout[open] summary { color:#b1ff79; }
+.game-shell:not(.in-game) { min-height:100dvh; }
+@media (max-width:600px) { .flight-setup .ship-card > div { flex-wrap:wrap; gap:4px; } }
+
+.solo-setup .ship-summary { margin:14px 0; color:#afc3c7; font-size:13px; line-height:1.6; }
+.solo-setup .ship-summary strong { color:#dceae8; }
+.overlay:has(.solo-setup) { background:rgba(4,10,15,.97); }
+
+.flight-setup .ship-card { height:auto !important; min-height:110px; padding:12px !important; gap:8px; }
+.flight-setup .ship-num { display:none; }
+.ship-preview { display:block; flex:0 0 88px; width:88px; height:66px; }
+.ship-preview img { width:100%; height:100%; object-fit:contain; filter:drop-shadow(0 3px 8px #81caca22); }
+.flight-setup .ship-card > div { min-width:0; }
+.flight-setup .ship-card strong { font-size:16px; }
+@media (min-width:601px) and (max-width:900px) { .ship-preview { flex-basis:58px; width:58px; } }
+@media (max-width:600px) { .flight-setup .ship-card { min-height:84px; } .flight-setup .ship-card > div { display:block; text-align:left; } }
+=======
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc

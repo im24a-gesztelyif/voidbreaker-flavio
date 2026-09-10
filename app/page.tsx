@@ -39,6 +39,7 @@ import {
   ACHIEVEMENTS,
   freshSave,
 } from '@/lib/game/content';
+import { ShipPreview } from '@/components/ship-preview';
 import { CoopLobby } from '@/components/coop-lobby';
 import { Multiplayer } from '@/lib/game/multiplayer';
 import { Simulation, loadSave } from '@/lib/game/simulation';
@@ -79,7 +80,7 @@ export default function Home() {
   const [, tick] = useState(0);
   const [ready, setReady] = useState(false),
     [error, setError] = useState(''),
-    [panel, setPanel] = useState<'settings' | 'archive' | 'multiplayer' | null>(
+    [panel, setPanel] = useState<'settings' | 'archive' | 'multiplayer' | 'mission' | null>(
       null,
     ),
     [difficulty, setDifficulty] = useState<Difficulty>('normal'),
@@ -448,7 +449,11 @@ export default function Home() {
               annotations: { readOnlyHint: true },
               execute: () => ({
                 phase: sim.current.state.phase,
-                sector: sim.current.state.sector + 1,
+                sector: sectorNumber(sim.current.state),
+                mode: sim.current.state.mode,
+                difficulty: sim.current.state.difficulty,
+                sharedUpgrades: sim.current.state.sharedUpgrades,
+                sharedKills: sim.current.state.sharedKills,
                 hull: sim.current.state.player.hp,
                 score: sim.current.score(),
                 time: sim.current.state.totalTime,
@@ -487,7 +492,7 @@ export default function Home() {
     const focusable = () =>
       Array.from(
         overlay.querySelectorAll<HTMLElement>(
-          'button:not(:disabled),input,[tabindex="0"]',
+          'button:not(:disabled),input,select:not(:disabled),[tabindex="0"]',
         ),
       );
     focusable()[0]?.focus();
@@ -544,6 +549,57 @@ export default function Home() {
       active: true,
     };
   };
+  const flightSetup = (
+          <section className="flight-setup">
+            {panel === 'mission' && <div className="run-config">
+              <label>MISSION<select aria-label="Mission mode" value={mode} onChange={e => setMode(e.target.value as GameMode)}><option value="campaign">Campaign · Three sectors</option><option value="endless">Endless · No final jump</option></select></label>
+              <label>DIFFICULTY<select aria-label="Difficulty" value={difficulty} onChange={e => setDifficulty(e.target.value as Difficulty)}>{Object.entries(DIFFICULTIES).map(([id,d]) => <option key={id} value={id}>{d.name}</option>)}</select></label>
+              <p>{DIFFICULTIES[difficulty].description} {mode === 'endless' && 'Every circuit brings stronger enemies and a new boss rotation.'}</p>
+            </div>
+            }
+            <div className="loadout-head">
+              <span>YOUR SHIP</span>
+              <span>HANGAR / 03 SHIPS</span>
+            </div>
+            <Tabs value={ship} onValueChange={(v) => option(v as ShipId)}>
+              <TabsList className="ship-list">
+                {SHIPS.map((x) => (
+                  <TabsTrigger className="ship-card" value={x.id} key={x.id}>
+                    <ShipPreview ship={x.id} />
+                    <div>
+                      <strong>{x.name}</strong>
+                      <small>{x.role}</small>
+                    </div>
+                    <ChevronRight size={16} />
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <p className="ship-summary"><strong>{selected.name}</strong> · {selected.hp} hull · {selected.shield} shield · {selected.passive}</p>
+            <div className="hangar-bottom-row">
+              <div className="weapon-select">
+                {WEAPONS.map((w) => (
+                  <button
+                    key={w.id}
+                    title={w.description}
+                    onClick={() => {
+                      persist({ ...save, weapon: w.id });
+                      room.current?.updateLoadout();
+                    }}
+                    className={weapon === w.id ? 'selected' : ''}
+                  >
+                    <Crosshair size={13} />
+                    {w.name}
+                  </button>
+                ))}
+              </div>
+              <div className="controls-hint">
+                <kbd>W A S D</kbd> MOVE <kbd>MOUSE</kbd> AIM <kbd>SPACE</kbd>{' '}
+                DASH
+              </div>
+            </div>
+          </section>
+  );
   return (
     <main className={`game-shell ${menu ? '' : 'in-game'}`}>
       <div ref={host} className="space-view" />
@@ -641,8 +697,8 @@ export default function Home() {
               className="launch"
               disabled={!ready}
               onClick={() => {
-                if (menu) leaveRoom();
-                start();
+                leaveRoom();
+                setPanel('mission');
               }}
             >
               {ready ? 'LAUNCH SOLO' : 'STARTING SYSTEMS…'}{' '}
@@ -679,6 +735,9 @@ export default function Home() {
               <span>SHIELD {selected.shield}</span>
             </div>
           </div>
+<<<<<<< HEAD
+
+=======
           <section className="hangar-bottom">
             <div className="run-config">
               <label>MISSION<select aria-label="Mission mode" value={mode} onChange={e => setMode(e.target.value as GameMode)}><option value="campaign">Campaign · Three sectors</option><option value="endless">Endless · No final jump</option></select></label>
@@ -726,6 +785,7 @@ export default function Home() {
               </div>
             </div>
           </section>
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
         </>
       )}
       {!menu && (
@@ -1150,7 +1210,7 @@ export default function Home() {
             </div>
             <div className="result-stats">
               <div>
-                <b>{s.stats.kills}</b>KILLS
+                <b>{s.sharedKills ? s.stats.kills : p.kills}</b>{s.partner && !s.sharedKills ? 'YOUR KILLS' : 'KILLS'}
               </div>
               <div>
                 <b>{s.stats.bosses}{s.mode === 'campaign' ? '/3' : ''}</b>BOSSES
@@ -1162,6 +1222,7 @@ export default function Home() {
                 <b>+{result.earned}</b>CORE SHARDS
               </div>
             </div>
+            {s.partner && !s.sharedKills && <p>YOUR KILLS {p.kills} · WINGMATE KILLS {s.partner.kills} · TEAM TOTAL {s.stats.kills}</p>}
             {result.achievements.length > 0 && (
               <p className="achievement-toast">
                 <Trophy size={16} />{' '}
@@ -1188,7 +1249,7 @@ export default function Home() {
           </div>
         </dialog>
       )}
-      {panel && panel !== 'multiplayer' && (
+      {panel && panel !== 'multiplayer' && panel !== 'mission' && (
         <dialog
           open
           className="overlay"
@@ -1355,12 +1416,25 @@ export default function Home() {
           </div>
         </dialog>
       )}
+      {panel === 'mission' && (
+        <dialog open className="overlay" aria-modal="true" aria-labelledby="mission-title">
+          <div className="dialog-content wide solo-setup">
+            <Button className="close-panel" variant="ghost" size="icon" aria-label="Close mission setup" onClick={() => setPanel(null)}><X /></Button>
+            <div className="eyebrow"><span /> SOLO FLIGHT PLAN</div>
+            <h2 id="mission-title">CHOOSE YOUR FLIGHT.</h2>
+            <p>Set your course. Pick your ship. Make the jump.</p>
+            {flightSetup}
+            <Button className="launch" disabled={!ready} onClick={start}>BEGIN MISSION <ArrowUpRight /></Button>
+          </div>
+        </dialog>
+      )}
       {panel === 'multiplayer' && (
         <CoopLobby
           ready={ready}
           room={room.current}
           save={save}
           initialCode={inviteCode}
+          loadout={flightSetup}
           connect={connectRoom}
           leave={leaveRoom}
           close={() => setPanel(null)}

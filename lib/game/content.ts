@@ -423,7 +423,7 @@ export const ACHIEVEMENTS = [
   {
     id: 'win',
     name: 'The Last Light',
-    description: 'Defeat the Nullheart.',
+    description: 'Defeat the Chronovore.',
     reward: 100,
   },
   {

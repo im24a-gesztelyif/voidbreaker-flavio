@@ -63,12 +63,21 @@ test('real peers: join, rejoin, launch, movement, dash, pause, signaling recover
     await host.getByRole('button', { name: 'ONLINE CO-OP' }).click();
     await host.getByRole('button', { name: 'CREATE ROOM' }).click();
     await expect(host.locator('.room-code strong')).toBeVisible();
+    await host.getByLabel('Room mission').selectOption('endless');
+    await host.getByLabel('Room difficulty').selectOption('veteran');
+    await host.getByLabel('Power-ups').selectOption('false');
+    await host.getByLabel('Kill display').selectOption('false');
     const code = await host.locator('.room-code strong').innerText();
     const launch = host.getByRole('button', { name: 'LAUNCH TOGETHER' });
     const join = async () => {
       await guest.goto(`${baseURL}/?room=${code}`);
       await guest.getByRole('button', { name: 'JOIN ROOM' }).click();
       await expect(launch).toBeEnabled();
+      await expect(guest.getByLabel('Room mission')).toHaveValue('endless');
+      await expect(guest.getByLabel('Room difficulty')).toHaveValue('veteran');
+      await expect(guest.getByLabel('Power-ups')).toHaveValue('false');
+      await expect(guest.getByLabel('Kill display')).toHaveValue('false');
+      await expect(guest.getByLabel('Power-ups')).toBeDisabled();
       await expect(
         guest.getByText('Waiting for the commander to launch.', {
           exact: true,
@@ -109,6 +118,9 @@ test('real peers: join, rejoin, launch, movement, dash, pause, signaling recover
         });
       }
     }
+    await host.locator('.lobby-loadout summary').click();
+    await host.getByRole('tab', {name:/BASTION/}).click();
+    await expect(guest.getByLabel('Room mission')).toHaveValue('endless');
     await launch.click();
     await expect(host.locator('.wingmate-hud')).toBeVisible();
     await expect(guest.locator('.wingmate-hud')).toBeVisible();
