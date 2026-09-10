@@ -23,6 +23,9 @@ import type {
   WeaponId,
 } from './types';
 
+import { DIFFICULTIES, cleanOptions, bossFor, BOSS_VARIANTS, sectorNumber } from './rules';
+import type { Difficulty, RoomOptions, PilotId } from './types';
+
 export const ARENA_RADIUS = 52;
 const TAU = Math.PI * 2;
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -46,7 +49,7 @@ export function loadSave(raw?: string | null): SaveData {
       totalRuns: count(data.totalRuns),
       wins: count(data.wins),
       bestScore: count(data.bestScore),
-      bestSector: count(data.bestSector, 3),
+      bestSector: count(data.bestSector, 1000000),
       totalKills: count(data.totalKills),
       ship: SHIPS.some((s) => s.id === data.ship) ? data.ship : base.ship,
       weapon: WEAPONS.some((w) => w.id === data.weapon)
@@ -85,22 +88,27 @@ export class Simulation {
   private id = 1;
   private randomState: number;
   private awarded = false;
+  private activePilot: PilotId = 0;
   constructor(
     ship: ShipId = 'kestrel',
     weapon: WeaponId = 'pulse',
     save: SaveData = freshSave(),
     seed = Date.now(),
-    difficulty: 'normal' | 'hard' = 'normal',
+    difficulty: Difficulty = 'normal',
+    options: Partial<RoomOptions> = {},
   ) {
     this.randomState = seed >>> 0 || 1;
     const spec = SHIPS.find((s) => s.id === ship)!;
     const hp = spec.hp + save.meta.hull * 8;
     this.state = {
+      ...cleanOptions({ difficulty, ...options }),
+      loop: 0, partnerUpgrades: {}, partnerChoices: [], partnerRerolls: 2, draftId: 0,
       phase: 'menu',
       previousPhase: 'playing',
       ship,
       weapon,
       player: {
+        kills: 0,
         x: 0,
         y: 0,
         vx: 0,
@@ -161,7 +169,6 @@ export class Simulation {
       bannerSub: '',
       bannerTime: 0,
       seed,
-      difficulty,
       autoFire: save.settings.autoFire,
       screenShake: 0,
       stationBought: [],
@@ -176,9 +183,11 @@ export class Simulation {
     this.randomState = x >>> 0;
     return this.randomState / 4294967296;
   }
-  private rank(id: UpgradeId) {
-    return this.state.upgrades[id] || 0;
+  private ranks(pilot: PilotId = this.activePilot) {
+    return pilot === 1 && !this.state.sharedUpgrades ? this.state.partnerUpgrades : this.state.upgrades;
   }
+  private rank(id: UpgradeId, pilot: PilotId = this.activePilot) { return this.ranks(pilot)[id] || 0; }
+  private get rules() { return DIFFICULTIES[this.state.difficulty]; }
   private emit(type: string, value?: number) {
     this.events.push({ type, value });
   }
@@ -206,7 +215,7 @@ export class Simulation {
   }
   start() {
     this.state.phase = 'playing';
-    this.banner('SECTOR 01', SECTORS[0].name);
+    this.banner(this.state.mode === 'endless' ? 'ENDLESS EXPEDITION' : 'SECTOR 01', SECTORS[0].name);
     this.emit('start');
   }
   private banner(title: string, subtitle: string, duration = 3.5) {
@@ -279,7 +288,7 @@ export class Simulation {
       const collector = this.closestPilot(item);
       const d = distance(item, collector),
         magnet =
-          7 * (1 + this.rank('magnet') * 0.6 + this.rank('speed') * 0.15);
+          7 * (1 + this.rank('magnet', collector === s.partner ? 1 : 0) * 0.6 + this.rank('speed', collector === s.partner ? 1 : 0) * 0.15);
       if (d < magnet || item.age > 20 || s.intermission > 0) {
         const a = angleTo(item, collector),
           v = Math.min(d, (13 + 180 / (d + 2)) * dt);
@@ -319,6 +328,7 @@ export class Simulation {
     this.state.partnerShip = ship;
     this.state.partnerWeapon = weapon;
     this.state.partnerAutoFire = save.settings.autoFire;
+    this.state.partnerRerolls = 2 + save.meta.fortune;
   }
   private pilots() {
     return this.state.partner
@@ -350,6 +360,7 @@ export class Simulation {
     input: GameInput,
     dt: number,
   ) {
+    this.activePilot = p === this.state.partner ? 1 : 0;
     if (p.hp <= 0) {
       p.vx = 0;
       p.vy = 0;
@@ -476,7 +487,9 @@ export class Simulation {
     crit = false,
   ) {
     if (this.state.bullets.length >= 700) return;
+    if (hostile) speed *= this.rules.projectile * Math.min(1.3, 1 + this.state.loop * .035);
     this.state.bullets.push({
+      owner: hostile ? undefined : this.activePilot,
       id: this.id++,
       x,
       y,
@@ -569,8 +582,8 @@ export class Simulation {
         s.bossSpawned = true;
         this.spawn('boss');
         this.banner(
-          SECTORS[s.sector].bossName,
-          'SECTOR CORE LOCKED · WEAPONS ONLINE',
+          BOSS_VARIANTS[bossFor(s)].name,
+          BOSS_VARIANTS[bossFor(s)].subtitle,
           4,
         );
         this.emit('boss');
@@ -588,19 +601,20 @@ export class Simulation {
       return;
     }
     s.spawnTimer -= dt;
-    if (s.spawnTimer <= 0 && s.enemies.length < 42) {
-      const progress = s.sector * 3 + s.wave - 1;
+    if (s.spawnTimer <= 0 && s.enemies.length < Math.min(80, this.rules.enemies + s.loop * 3)) {
+      const progress = (sectorNumber(s) - 1) * 3 + s.wave - 1;
       s.spawnTimer =
-        Math.max(0.4, 1.65 - progress * 0.13) * (0.7 + this.random() * 0.6);
+        Math.max(0.28, (1.65 - Math.min(9, progress) * 0.13) / this.rules.pressure / (1 + s.loop * .08)) * (0.7 + this.random() * 0.6);
       const pool: EnemyKind[] = ['drone', 'drone', 'swarm'];
       if (s.wave >= 2 || s.sector > 0) pool.push('gunner', 'striker');
-      if (s.sector > 0) pool.push('bomber', 'warden');
+      if (s.sector > 0 || s.loop > 0) pool.push('bomber', 'warden', 'anchor', 'brood');
+      if (s.wave >= 2 || s.loop > 0) pool.push('lancer', 'manta');
       const kind = pool[Math.floor(this.random() * pool.length)];
       this.spawn(
         kind,
         undefined,
         undefined,
-        progress >= 2 && this.random() < 0.07 + s.sector * 0.025,
+        progress >= 2 && this.random() < Math.min(.3, (.07 + s.sector * .025 + s.loop * .025) * this.rules.pressure),
       );
       if (kind === 'swarm') for (let i = 0; i < 2; i++) this.spawn('swarm');
     }
@@ -630,24 +644,26 @@ export class Simulation {
       pos.x = -s.player.x * 0.7 + Math.cos(a) * 12;
       pos.y = -s.player.y * 0.7 + Math.sin(a) * 12;
     }
-    const scale = (1 + s.sector * 0.55) * (s.difficulty === 'hard' ? 1.3 : 1);
+    const depth = sectorNumber(s) - 1;
+    const scale = (1 + depth * .55) * this.rules.health;
     const baseHp =
       kind === 'boss'
-        ? [2100, 4200, 6800][s.sector] * (s.difficulty === 'hard' ? 1.3 : 1)
+        ? (2100 + 1900 * depth + 225 * depth * depth) * this.rules.health
         : data.hp * scale * (elite ? 2.5 : 1);
     const hp = baseHp * (s.partner ? 1.65 : 1);
     const e: Enemy = {
       id: this.id++,
       ...pos,
       kind,
+      bossVariant: kind === 'boss' ? bossFor(s) : 0,
+      telegraphKind: 'ring',
       hp,
       maxHp: hp,
       radius: data.radius * (elite ? 1.2 : 1),
-      speed: data.speed,
+      speed: data.speed * this.rules.speed * Math.min(1.4, 1 + s.loop * .045),
       damage:
         data.damage *
-        (1 + s.sector * 0.16) *
-        (s.difficulty === 'hard' ? 1.2 : 1),
+        (1 + depth * 0.16) * this.rules.damage,
       angle: angleTo(pos, s.player),
       cooldown: 1.5 + this.random(),
       age: 0,
@@ -662,7 +678,7 @@ export class Simulation {
       targetX: 0,
       targetY: 0,
     };
-    s.enemies.push(e);
+    if (s.enemies.length < 80 || kind === 'boss') s.enemies.push(e);
     this.fx('spawn', pos.x, pos.y, data.color, e.radius * 2, 0.7);
     return e;
   }
@@ -673,7 +689,7 @@ export class Simulation {
     e.hit = Math.max(0, e.hit - dt);
     e.slow = Math.max(0, e.slow - dt);
     if (e.age < 0.7) return;
-    e.cooldown -= dt;
+    e.cooldown -= dt * this.rules.pressure;
     const d = distance(e, p),
       a = angleTo(e, p);
     let speed =
@@ -681,11 +697,15 @@ export class Simulation {
       (e.slow > 0
         ? e.kind === 'boss'
           ? 0.92
-          : 0.65 - this.rank('freeze') * 0.05
+          : .5
         : 1);
     e.angle += normalizeAngle(a - e.angle) * Math.min(1, dt * 5);
     if (e.kind === 'boss') {
       this.updateBoss(e, dt, a, d);
+      return;
+    }
+    if (['lancer', 'brood', 'manta', 'anchor'].includes(e.kind)) {
+      this.updateSpecialEnemy(e, p, dt, a, d);
       return;
     }
     let moveAngle = a;
@@ -709,7 +729,8 @@ export class Simulation {
         speed = 0;
       } else if (e.cooldown <= 0) {
         e.cooldown = 4;
-        e.telegraph = 0.85;
+        e.telegraph = Math.max(.65, .85 * this.rules.warning);
+        e.telegraphKind = 'line';
         e.targetX = a;
       }
     }
@@ -767,8 +788,108 @@ export class Simulation {
       }
     }
   }
+  private radialBurst(x: number, y: number, count: number, speed: number, damage: number, color: string, offset = 0, gap?: number) {
+    for (let i = 0; i < count; i++) {
+      const a = i * TAU / count + offset;
+      if (gap !== undefined && Math.abs(normalizeAngle(a - gap)) < .5) continue;
+      this.addBullet(x, y, a, speed, damage, true, color, 'orb');
+    }
+  }
+  private updateSpecialEnemy(e: Enemy, p: Player, dt: number, a: number, d: number) {
+    const s = this.state, color = ENEMY_DATA[e.kind].color;
+    const orbit = a + (d < 24 ? Math.PI / 2 : 0) + (e.kind === 'manta' ? Math.sin(e.age * 1.8) * .85 : 0);
+    if (e.telegraph <= 0 || e.kind === 'manta') {
+      e.x += Math.cos(orbit) * e.speed * (e.slow > 0 ? .5 : 1) * dt;
+      e.y += Math.sin(orbit) * e.speed * (e.slow > 0 ? .5 : 1) * dt;
+    }
+    this.boundary(e, ARENA_RADIUS - 2);
+    if (e.telegraph > 0) {
+      e.telegraph -= dt;
+      if (e.telegraph <= 0) {
+        if (e.kind === 'lancer') {
+          for (let i = -1; i <= 1; i++) this.addBullet(e.x, e.y, e.targetX + i * .055, 29, e.damage, true, color, 'orb');
+        } else if (e.kind === 'brood') {
+          for (let i = 0; i < 3 && s.enemies.length < 80; i++) this.spawn('swarm', e.x + Math.cos(i * TAU / 3) * 3, e.y + Math.sin(i * TAU / 3) * 3);
+          this.fx('spawn', e.x, e.y, color, 5, .6);
+        } else if (e.kind === 'anchor') {
+          this.fx('pulse', e.targetX, e.targetY, color, 6, .65);
+          for (const pilot of this.pilots()) if (distance(pilot, { x: e.targetX, y: e.targetY }) < 5.5) this.hurtPlayer(e.damage, pilot);
+          this.radialBurst(e.targetX, e.targetY, 10, 8, e.damage * .65, color);
+        }
+        e.cooldown = e.kind === 'brood' ? 6 : 3.7;
+        this.emit('enemyShoot');
+      }
+    } else if (e.cooldown <= 0) {
+      if (e.kind === 'manta') {
+        e.attack++;
+        for (let i = 0; i < 5; i++) this.addBullet(e.x, e.y, a + (i - 2) * .22 + (e.attack % 2 ? .3 : -.3), 12, e.damage, true, color, 'orb');
+        e.cooldown = 2.8;
+      } else {
+        e.telegraph = Math.max(.75, (e.kind === 'anchor' ? 1.5 : 1.2) * this.rules.warning);
+        e.telegraphKind = e.kind === 'lancer' ? 'line' : e.kind === 'anchor' ? 'target' : 'ring';
+        e.targetX = e.kind === 'anchor' ? p.x : a;
+        e.targetY = e.kind === 'anchor' ? p.y : 0;
+      }
+    }
+    for (const pilot of this.pilots()) if (distance(e, pilot) < e.radius + .9) this.hurtPlayer(e.damage, pilot);
+  }
+  private updateNewBoss(e: Enemy, dt: number, a: number, d: number) {
+    const s = this.state, def = BOSS_VARIANTS[e.bossVariant];
+    const phase = e.hp > e.maxHp * .7 ? 1 : e.hp > e.maxHp * .35 ? 2 : 3;
+    if (phase !== e.bossPhase) {
+      e.bossPhase = phase; e.cooldown = 1.2; e.telegraph = 0;
+      this.fx('pulse', e.x, e.y, def.color, 12, .8);
+      this.banner(`PHASE ${phase}`, def.subtitle, 2);
+    }
+    if (e.telegraph <= 0) {
+      const orbit = d > 25 ? a : a + Math.PI / 2;
+      e.x += Math.cos(orbit) * e.speed * dt; e.y += Math.sin(orbit) * e.speed * dt;
+      this.boundary(e, ARENA_RADIUS - 8);
+    }
+    if (e.telegraph > 0) {
+      e.telegraph -= dt;
+      if (e.bossVariant === 3) {
+        const well = { x: e.targetX, y: e.targetY };
+        for (const pilot of this.pilots()) if (pilot.hp > 0 && pilot.dashTimer <= 0 && distance(pilot, well) < 20 && distance(pilot, well) > 1) {
+          const pull = angleTo(pilot, well);
+          pilot.x += Math.cos(pull) * 3.5 * dt; pilot.y += Math.sin(pull) * 3.5 * dt;
+        }
+      }
+      if (e.telegraph <= 0) {
+        if (e.bossVariant === 4) {
+          for (let arm = 0; arm < 4; arm++) for (let i = -phase; i <= phase; i++)
+            this.addBullet(e.x, e.y, e.targetX + arm * TAU / 4 + i * .07, 18 + phase, e.damage, true, def.color, 'orb');
+          this.fx('pulse', e.x, e.y, def.color, 9, .45);
+        } else {
+          const radius = e.bossVariant === 3 ? 7 : 5;
+          this.fx('pulse', e.targetX, e.targetY, def.color, radius + 1, .7);
+          for (const pilot of this.pilots()) if (distance(pilot, { x: e.targetX, y: e.targetY }) < radius)
+            this.hurtPlayer(e.damage * 1.3, pilot);
+          this.radialBurst(e.targetX, e.targetY, e.bossVariant === 3 ? 20 : 12, e.bossVariant === 3 ? 10 : 15, e.damage * .75, def.color, e.attack * .15, angleTo({ x: e.targetX, y: e.targetY }, e));
+          if (e.bossVariant === 5 && phase >= 2) {
+            // Slow outer fire keeps pressure on pilots after the marked strike.
+            this.radialBurst(e.x, e.y, 10 + phase * 2, 8, e.damage * .65, def.color, e.age);
+          }
+        }
+        e.cooldown = e.bossVariant === 5 ? 1.6 - phase * .15 : 2.5 - phase * .25;
+        this.emit('enemyShoot');
+      }
+    } else if (e.cooldown <= 0) {
+      const target = this.closestPilot(e);
+      e.attack++;
+      e.telegraph = Math.max(.85, (e.bossVariant === 3 ? 1.65 : 1.35) * this.rules.warning);
+      e.telegraphKind = e.bossVariant === 4 ? 'cross' : 'target';
+      e.targetX = e.bossVariant === 4 ? a + e.attack * .19 : target.x;
+      e.targetY = e.bossVariant === 4 ? 0 : target.y;
+      if (phase >= 2 && e.attack % 4 === 0 && s.enemies.length < 12) {
+        for (let i = 0; i < 2; i++) this.spawn(e.bossVariant === 3 ? 'anchor' : e.bossVariant === 4 ? 'manta' : 'lancer', e.x + (i ? 8 : -8), e.y + 5);
+      }
+    }
+    for (const pilot of this.pilots()) if (distance(e, pilot) < e.radius + 1) this.hurtPlayer(e.damage * 1.4, pilot);
+  }
   private updateBoss(e: Enemy, dt: number, a: number, d: number) {
     const s = this.state;
+    if (e.bossVariant >= 3) { this.updateNewBoss(e, dt, a, d); return; }
     const phase = e.hp > e.maxHp * 0.7 ? 1 : e.hp > e.maxHp * 0.35 ? 2 : 3;
     if (phase !== e.bossPhase) {
       e.bossPhase = phase;
@@ -812,7 +933,8 @@ export class Simulation {
     } else if (e.cooldown <= 0) {
       e.attack++;
       if (e.attack % 3 === 0 || (phase === 3 && e.attack % 2 === 0)) {
-        e.telegraph = 1;
+        e.telegraph = Math.max(.7, this.rules.warning);
+        e.telegraphKind = 'ring';
         e.targetX = a + 0.3;
         e.cooldown = 3;
       } else {
@@ -844,6 +966,7 @@ export class Simulation {
   }
 
   private updateBullet(b: Bullet, dt: number) {
+    this.activePilot = b.owner ?? 0;
     b.life -= dt;
     if (b.life <= 0) return;
     const s = this.state;
@@ -973,10 +1096,13 @@ export class Simulation {
     }
     if (e.hp <= 0) this.kill(e);
   }
-  private kill(e: Enemy) {
+  private kill(e: Enemy, suppressExplosion = false) {
+    if (e.deathProcessed) return;
+    e.deathProcessed = true;
     const s = this.state,
-      p = s.player;
+      p = this.activePilot === 1 && s.partner ? s.partner : s.player;
     s.stats.kills++;
+    p.kills++;
     s.combo++;
     s.comboTime = 4.5;
     s.stats.maxCombo = Math.max(s.stats.maxCombo, s.combo);
@@ -985,7 +1111,7 @@ export class Simulation {
       p.pulse = Math.min(
         100,
         p.pulse +
-          (e.kind === 'swarm' ? 1 : 2) * (1 + this.rank('pulse') * 0.25),
+          (e.kind === 'swarm' ? 1 : 2) * (1 + this.rank('pulse', p === s.partner ? 1 : 0) * 0.25),
       );
     this.fx('explosion', e.x, e.y, ENEMY_DATA[e.kind].color, e.radius * 2, 0.7);
     this.emit('explosion', e.kind === 'boss' ? 0.4 : 0.9 + this.random() * 0.3);
@@ -1019,20 +1145,18 @@ export class Simulation {
         value: 12,
         age: 0,
       });
-    if (this.rank('lifesteal') && s.stats.kills % 15 === 0) {
-      for (const p of this.pilots())
-        if (p.hp > 0)
-          p.hp = Math.min(p.maxHp, p.hp + 5 * this.rank('lifesteal'));
+    if (this.rank('lifesteal') && p.kills % 15 === 0) {
+      if (p.hp > 0) p.hp = Math.min(p.maxHp, p.hp + 5 * this.rank('lifesteal'));
       this.fx('heal', p.x, p.y, '#97ffd5', 3, 0.6);
     }
-    if (this.rank('explode')) {
+    if (this.rank('explode') && !suppressExplosion) {
       this.fx('pulse', e.x, e.y, '#ffba79', 5, 0.35);
       for (const other of s.enemies)
         if (other.hp > 0 && distance(other, e) < 5) {
           const damage = 22 * this.rank('explode');
           s.stats.damage += Math.min(other.hp, damage);
           other.hp -= damage;
-          if (other.hp <= 0) this.killWithoutExplosion(other);
+          if (other.hp <= 0) this.kill(other, true);
         }
     }
     if (e.kind === 'boss') {
@@ -1043,7 +1167,7 @@ export class Simulation {
       s.pickups = [];
       for (const pilot of this.pilots()) pilot.shield = pilot.maxShield;
       this.restorePilots(35);
-      if (s.sector === 2) {
+      if (s.sector === 2 && s.mode === 'campaign') {
         s.phase = 'victory';
         this.emit('victory');
       } else {
@@ -1052,13 +1176,6 @@ export class Simulation {
         this.emit('station');
       }
     }
-  }
-  private killWithoutExplosion(e: Enemy) {
-    // Secondary explosions never recursively trigger themselves.
-    const rank = this.state.upgrades.explode;
-    this.state.upgrades.explode = 0;
-    this.kill(e);
-    this.state.upgrades.explode = rank;
   }
   private hurtPlayer(amount: number, p: Player = this.state.player) {
     const s = this.state;
@@ -1079,7 +1196,7 @@ export class Simulation {
     collector: Player = this.state.player,
   ) {
     const s = this.state;
-    if (kind === 'xp') s.player.xp += value * (1 + this.rank('magnet') * 0.15);
+    if (kind === 'xp') s.player.xp += value * (1 + this.rank('magnet', collector === s.partner ? 1 : 0) * 0.15);
     else if (kind === 'scrap') {
       s.stats.scrap += value;
       s.stats.totalScrap += value;
@@ -1090,14 +1207,14 @@ export class Simulation {
     }
     this.emit('pickup');
   }
-  private draft() {
-    const pool = UPGRADES.filter((u) => this.rank(u.id) < u.max);
+  private draft(pilot: PilotId = 0) {
+    const pool = UPGRADES.filter((u) => this.rank(u.id, pilot) < u.max);
     const result = [];
     while (pool.length && result.length < 3) {
       const index = Math.floor(this.random() * pool.length);
       result.push(pool.splice(index, 1)[0]);
     }
-    this.state.choices = result;
+    if (pilot === 1) this.state.partnerChoices = result; else this.state.choices = result;
   }
   private levelUp() {
     const s = this.state;
@@ -1106,29 +1223,35 @@ export class Simulation {
     s.player.nextXp = 26 + s.player.level * 15;
     s.previousPhase = 'playing';
     s.phase = 'upgrade';
-    this.draft();
+    this.openDraft();
     this.emit('levelup');
-    if (!s.choices.length) {
-      s.phase = 'playing';
-      s.player.hp = s.player.maxHp;
-    }
   }
-  chooseUpgrade(id: UpgradeId) {
+  private openDraft() {
     const s = this.state;
-    if (s.phase !== 'upgrade' || !s.choices.some((c) => c.id === id))
-      return false;
-    this.applyUpgrade(id);
-    s.choices = [];
-    s.phase = s.previousPhase;
+    s.draftId++;
+    this.draft(0);
+    s.partnerChoices = [];
+    if (s.partner && !s.sharedUpgrades) this.draft(1);
+    for (const [i,p] of this.pilots().entries()) {
+      if (!(i && !s.sharedUpgrades ? s.partnerChoices : s.choices).length && p.hp > 0) p.hp = p.maxHp;
+    }
+    if (!s.choices.length && !s.partnerChoices.length) s.phase = s.previousPhase;
+  }
+  chooseUpgrade(id: UpgradeId, pilot: PilotId = 0, draftId = this.state.draftId) {
+    const s = this.state, choices = pilot ? s.partnerChoices : s.choices;
+    if (s.phase !== 'upgrade' || draftId !== s.draftId || (pilot === 1 && (!s.partner || s.sharedUpgrades)) || !choices.some(c => c.id === id)) return false;
+    this.applyUpgrade(id, pilot);
+    if (pilot) s.partnerChoices = []; else s.choices = [];
+    if (!s.choices.length && !s.partnerChoices.length) s.phase = s.previousPhase;
     this.emit('upgrade');
     return true;
   }
-  applyUpgrade(id: UpgradeId) {
+  applyUpgrade(id: UpgradeId, pilot: PilotId = 0) {
     const s = this.state,
       def = UPGRADES.find((u) => u.id === id);
-    if (!def || this.rank(id) >= def.max) return;
-    s.upgrades[id] = this.rank(id) + 1;
-    for (const p of this.pilots()) {
+    if (!def || this.rank(id, pilot) >= def.max) return;
+    this.ranks(pilot)[id] = this.rank(id, pilot) + 1;
+    for (const p of s.sharedUpgrades ? this.pilots() : [pilot === 1 && s.partner ? s.partner : s.player]) {
       const ship = p === s.player ? s.ship : s.partnerShip!;
       if (id === 'damage')
         p.damage += SHIPS.find((x) => x.id === ship)!.damage * 0.2;
@@ -1151,13 +1274,11 @@ export class Simulation {
         p.speed += SHIPS.find((x) => x.id === ship)!.speed * 0.12;
     }
   }
-  reroll() {
-    const s = this.state;
-    if (s.phase !== 'upgrade' || s.rerolls <= 0) return false;
-    s.rerolls--;
-    this.draft();
-    this.emit('click');
-    return true;
+  reroll(pilot: PilotId = 0, draftId = this.state.draftId) {
+    const s = this.state, choices = pilot ? s.partnerChoices : s.choices;
+    if (s.phase !== 'upgrade' || s.draftId !== draftId || !choices.length || (pilot === 1 && s.sharedUpgrades) || (pilot ? s.partnerRerolls : s.rerolls) <= 0) return false;
+    if (pilot) s.partnerRerolls--; else s.rerolls--;
+    this.draft(pilot); this.emit('click'); return true;
   }
   purchase(id: 'repair' | 'module' | 'charge') {
     const s = this.state,
@@ -1173,7 +1294,7 @@ export class Simulation {
       (id === 'charge' && this.pilots().every((p) => p.pulse >= 100))
     )
       return false;
-    if (id === 'module' && !UPGRADES.some((u) => this.rank(u.id) < u.max))
+    if (id === 'module' && !UPGRADES.some(u => this.rank(u.id, 0) < u.max || (s.partner && !s.sharedUpgrades && this.rank(u.id, 1) < u.max)))
       return false;
     s.stats.scrap -= cost;
     s.stationBought.push(id);
@@ -1182,7 +1303,7 @@ export class Simulation {
     if (id === 'module') {
       s.previousPhase = 'station';
       s.phase = 'upgrade';
-      this.draft();
+      this.openDraft();
     }
     this.emit('upgrade');
     return true;
@@ -1191,6 +1312,7 @@ export class Simulation {
     const s = this.state;
     if (s.phase !== 'station') return;
     s.sector++;
+    if (s.sector >= SECTORS.length) { s.sector = 0; s.loop++; }
     s.wave = 1;
     s.waveTime = 0;
     s.waveDuration = 38;
@@ -1210,17 +1332,13 @@ export class Simulation {
     s.spawnTimer = 2;
     s.intermission = 0;
     s.phase = 'playing';
-    this.banner(`SECTOR 0${s.sector + 1}`, SECTORS[s.sector].name, 4);
+    this.banner(`SECTOR ${String(sectorNumber(s)).padStart(2, '0')}`, SECTORS[s.sector].name, 4);
     this.emit('start');
   }
   score() {
     const s = this.state;
     return Math.floor(
-      s.stats.kills * 100 +
-        s.stats.bosses * 2500 +
-        s.stats.maxCombo * 30 +
-        s.player.level * 150 +
-        (s.phase === 'victory' ? 10000 : 0),
+      (s.stats.kills * 100 + s.stats.bosses * 2500 + s.stats.maxCombo * 30 + s.player.level * 150 + (s.phase === 'victory' ? 10000 : 0)) * this.rules.reward,
     );
   }
   finish(save: SaveData) {
@@ -1235,7 +1353,7 @@ export class Simulation {
         (s.phase === 'victory' ? 80 : 5);
     updated.totalRuns++;
     updated.totalKills += s.stats.kills;
-    updated.bestSector = Math.max(updated.bestSector, s.sector + 1);
+    updated.bestSector = Math.max(updated.bestSector, sectorNumber(s));
     updated.bestScore = Math.max(updated.bestScore, this.score());
     updated.shards += earned;
     if (s.phase === 'victory') updated.wins++;

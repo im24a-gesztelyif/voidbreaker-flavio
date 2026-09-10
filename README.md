@@ -1,6 +1,6 @@
 # VOIDBREAKER — The Last Light
 
-A Three.js space roguelite with solo and online two-player cooperative runs. Fly one of three ships, choose one of three weapons, and build your arsenal across three sectors and bosses. All game text is in English. Existing browser saves remain compatible.
+A Three.js space roguelite with solo and online two-player cooperative runs. Fly one of three ships, choose one of three weapons, and build your arsenal through a three-sector campaign or an endless expedition. All game text is in English. Existing browser saves remain compatible.
 
 ## Run locally
 
@@ -15,15 +15,25 @@ Open the local URL printed by the server. For another device on the same network
 
 ## Play together
 
-1. Each pilot selects a ship and weapon in the hangar.
-2. Choose **Online Co-op**. The commander chooses **Create Room**.
+1. Choose **Online Co-op** and open **Your Ship & Weapon** to select your loadout.
+2. The commander chooses **Create Room** and sets the mission rules.
 3. Share the eight-character room code or use **Copy Invite**. A localhost invite must be changed to an address the other device can reach.
 4. The second pilot enters the code and chooses **Join Room**.
 5. When both ships are connected, the commander chooses **Launch Together**.
 
-Both pilots move, shoot, dash, and use EMP independently. Experience, upgrades, scrap, and score are shared; enemy health scales to the squad. The commander selects shared upgrades, buys station supplies, resumes paused runs, and starts rematches. Either pilot can pause. A downed ship returns with at least half hull when the surviving pilot clears a wave. The run ends when both ships are down. Completed runs award progression in each pilot's own browser.
+Both pilots move, shoot, dash, and use EMP independently. Experience, scrap, and score are shared; enemy health scales to the squad. Before launch, the commander chooses campaign/endless, difficulty, shared or individual power-ups, and shared or separate kill displays. Shared modules upgrade both ships; individual modules offer each pilot their own cards and rerolls, and time resumes once both have chosen. The commander buys station supplies, resumes paused runs, and starts rematches. Either pilot can pause. A downed ship returns with at least half hull when the surviving pilot clears a wave. The run ends when both ships are down. Completed runs award progression in each pilot's own browser.
 
 Keep both tabs open. Switching focus between visible co-op windows clears held controls without pausing; hiding a game tab pauses the shared run. The commander resumes it. Brief signaling outages reconnect without stopping an established game. A lost gameplay connection stops the run and offers a return to the hangar, within about 32 seconds for an abruptly closed browser. Guests can leave and rejoin the same lobby before launch. There is no host migration or mid-run reconnection.
+
+## Missions and builds
+
+Press **Launch Solo** to select the mission, difficulty, ship, and weapon, then **Begin Mission**. The main menu stays clear of configuration. Co-op loadouts and owner settings live inside the multiplayer lobby.
+
+- **Campaign:** three sectors, ending with the Chronovore.
+- **Endless:** stations continue after every boss, sector numbers keep climbing, and six bosses rotate across successive circuits. Enemy and boss health/damage increase with sector depth; density and projectile speed have bounds. Fully completed builds receive hull recovery instead of empty upgrade screens.
+- **Easy / Normal / Hard / Veteran / Ace:** each tier changes enemy health, damage, speed, attack frequency, projectile speed, warning time, population, and score multiplier.
+- **New enemies:** Needle Lancer locks a firing lane; Brood Ark releases swarms; Veil Manta fires sweeping crescents; Rift Anchor marks delayed blast zones.
+- **New bosses:** Gravemaw pulls pilots toward marked gravity wells; Mirror Regent unleashes four-way crossfire; Chronovore strikes the position you occupied when its warning began. Marked circles show the damaging blast radius.
 
 ## Controls
 
@@ -42,7 +52,7 @@ Graphics, sound, volume, and screen shake are adjustable in Settings. Turn off b
 
 ## Multiplayer implementation
 
-The commander runs one authoritative 60 Hz simulation. The wingmate sends validated inputs at up to 30 Hz; snapshots arrive at up to 15 Hz. Reliable binary WebRTC messages support chunking, with snapshot backpressure and visual smoothing. Run IDs, input sequence numbers, single-use ability flags, a 400 ms input timeout, and connection heartbeats prevent stale controls and old-run actions.
+The commander runs one authoritative 60 Hz simulation. The wingmate sends changed movement at up to 20 Hz, immediate one-shot abilities, and a 10 Hz idle keepalive. Snapshots arrive at up to 20 Hz (1 Hz while paused). Reliable binary WebRTC messages use compact entity tuples, integer quantization to 0.01 units, cached metadata, a 32 KB backpressure threshold, and bounded visual prediction for ships, enemies, and projectiles. A reproducible 30-enemy/120-projectile fixture measures approximately 88% less snapshot payload per second than the previous full-state 40 Hz stream; actual traffic varies by scene and excludes transport overhead. Run IDs, input sequence numbers, single-use ability flags, a 400 ms input timeout, and connection heartbeats prevent stale controls and old-run actions.
 
 Connections use [PeerJS](https://peerjs.com/client/api/peer) for public signaling, with explicit STUN servers and configurable TURN relays. PeerJS 1.5.5's bundled TURN hostnames had no DNS address records during the September 2026 investigation; relying on them allowed local tests to pass while remote players failed. A working TURN provider is necessary for players whose networks cannot connect directly. The game fetches ICE configuration from `/api/ice` before connecting, and shows a setup notice when a relay is unavailable. Room codes are invite secrets, not an authenticated identity system.
 

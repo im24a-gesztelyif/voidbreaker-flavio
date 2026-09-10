@@ -1,3 +1,5 @@
+import { DamageFeedback } from './damage-feedback';
+import { BOSS_VARIANTS } from './rules';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -54,6 +56,7 @@ export class SpaceRenderer {
   private observed: ResizeObserver;
   private quality: 'high' | 'low';
   private scratchColor = new THREE.Color();
+  private damageFeedback = new DamageFeedback();
   private time = 0;
   private lastMenu = true;
   private lastSnapshot: GameState | null = null;
@@ -285,10 +288,11 @@ export class SpaceRenderer {
   }
   render(s: GameState, dt: number, shake = true, network = false) {
     this.snapshotAge =
-      this.lastSnapshot === s && network
+      this.lastSnapshot === s && network && s.phase === 'playing'
         ? Math.min(0.09, this.snapshotAge + dt)
         : 0;
     this.lastSnapshot = s;
+    this.damageFeedback.update(s, dt);
     this.time += dt;
     const menu = s.phase === 'menu',
       p = s.player,
@@ -351,7 +355,7 @@ export class SpaceRenderer {
       const other = s.partner;
       g.visible = !menu && !!other && SHIPS[i].id === s.partnerShip;
       if (!g.visible || !other) return;
-      this.temp.set(other.x, 0.5, other.y);
+      this.temp.set(other.x + other.vx * this.snapshotAge, 0.5, other.y + other.vy * this.snapshotAge);
       if (network && !this.lastMenu)
         g.position.lerp(this.temp, 1 - Math.exp(-dt * 22));
       else g.position.copy(this.temp);
@@ -388,11 +392,21 @@ export class SpaceRenderer {
     for (const e of s.enemies) {
       let g = this.enemies.get(e.id);
       if (!g) {
-        g = createEnemy(e.kind, s.sector);
+        g = createEnemy(e.kind, e.kind === 'boss' ? BOSS_VARIANTS[e.bossVariant].model : s.sector + 1);
+        g.position.set(e.x, .4, e.y);
         this.enemies.set(e.id, g);
         this.scene.add(g);
       }
-      g.position.set(e.x, 0.4, e.y);
+      if (network && s.phase === 'playing') {
+        const sample = g.userData.networkSample;
+        if (!sample || sample.time !== s.time) {
+          const elapsed = sample ? s.time - sample.time : 0;
+          g.userData.networkSample = {x:e.x,y:e.y,time:s.time,vx:elapsed > 0 && elapsed < .3 ? (e.x-sample.x)/elapsed : 0,vy:elapsed > 0 && elapsed < .3 ? (e.y-sample.y)/elapsed : 0};
+        }
+        const v = g.userData.networkSample;
+        this.temp.set(e.x+v.vx*this.snapshotAge,.4,e.y+v.vy*this.snapshotAge);
+        g.position.lerp(this.temp,1-Math.exp(-dt*25));
+      } else g.position.set(e.x, 0.4, e.y);
       g.rotation.y = -e.angle - Math.PI / 2;
       const scale =
         (e.elite ? 1.25 : 1) *
@@ -407,7 +421,7 @@ export class SpaceRenderer {
     let n = 0;
     for (const b of s.bullets) {
       if (n >= 700) break;
-      this.dummy.position.set(b.x, 0.4, b.y);
+      this.dummy.position.set(b.x + b.vx * (s.phase === 'playing' ? this.snapshotAge : 0), 0.4, b.y + b.vy * (s.phase === 'playing' ? this.snapshotAge : 0));
       this.dummy.rotation.set(0, -Math.atan2(b.vy, b.vx) + Math.PI / 2, 0);
       const length = b.hostile
         ? 0.6
@@ -545,6 +559,24 @@ export class SpaceRenderer {
     const ctx = this.labelContext;
     ctx.clearRect(0, 0, this.width, this.height);
     if (s.phase === 'menu') return;
+    const feedback = this.damageFeedback;
+    if (feedback.shield > 0 || feedback.hull > 0) {
+      const hull = feedback.hull > 0;
+      const alpha = hull ? feedback.hull / .45 : feedback.shield / .35;
+      const color = hull ? '255,125,83' : '103,211,255';
+      ctx.save();
+      const gradient = ctx.createRadialGradient(this.width/2,this.height/2,this.height*.3,this.width/2,this.height/2,Math.hypot(this.width,this.height)/2);
+      gradient.addColorStop(0,'transparent');gradient.addColorStop(1,`rgba(${color},${alpha*.2})`);
+      ctx.fillStyle=gradient;ctx.fillRect(0,0,this.width,this.height);
+      const pos=this.project(s.player.x,s.player.y);
+      ctx.globalAlpha=alpha;ctx.strokeStyle=`rgb(${color})`;ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2;
+      ctx.beginPath();
+      if(hull) {
+        for(let i=0;i<4;i++) { const a=i*Math.PI/2+Math.PI/4;ctx.moveTo(pos.x+Math.cos(a-.18)*30,pos.y+Math.sin(a-.18)*30);ctx.lineTo(pos.x+Math.cos(a)*36,pos.y+Math.sin(a)*36);ctx.lineTo(pos.x+Math.cos(a+.18)*30,pos.y+Math.sin(a+.18)*30); }
+      } else ctx.arc(pos.x,pos.y,30+(1-alpha)*12,0,TAU);
+      ctx.stroke();ctx.font='bold 11px monospace';ctx.textAlign='center';ctx.fillText(hull?'HULL HIT':'SHIELD HIT',pos.x,pos.y+54);
+      ctx.restore();
+    }
     if (s.partner) {
       const pos = this.project(s.partner.x, s.partner.y);
       ctx.font = 'bold 12px monospace';
@@ -563,22 +595,29 @@ export class SpaceRenderer {
         ctx.fillRect(pos.x - 17, pos.y - 22, (34 * e.hp) / e.maxHp, 3);
       }
       if (e.telegraph > 0) {
-        ctx.strokeStyle = '#ff6b6266';
+        ctx.strokeStyle = '#ffad80cc';
+        ctx.fillStyle = '#ff77551c';
         ctx.lineWidth = 2;
-        if (e.kind === 'striker') {
-          const end = this.project(
-            e.x + Math.cos(e.targetX) * 25,
-            e.y + Math.sin(e.targetX) * 25,
-          );
-          ctx.beginPath();
-          ctx.moveTo(pos.x, pos.y);
-          ctx.lineTo(end.x, end.y);
-          ctx.stroke();
+        ctx.setLineDash([6, 5]);
+        if (e.telegraphKind === 'line' || e.telegraphKind === 'cross') {
+          const rays = e.telegraphKind === 'cross' ? 4 : 1;
+          for (let i = 0; i < rays; i++) {
+            const angle = e.targetX + i * Math.PI / 2;
+            const end = this.project(e.x + Math.cos(angle) * 65, e.y + Math.sin(angle) * 65);
+            ctx.beginPath(); ctx.moveTo(pos.x,pos.y); ctx.lineTo(end.x,end.y); ctx.stroke();
+          }
         } else {
+          const target = e.telegraphKind === 'target';
+          const radius = target ? (e.kind === 'boss' ? (e.bossVariant === 3 ? 7 : 5) : 5.5) : (e.kind === 'brood' ? 4 : 8);
+          const x = target ? e.targetX : e.x, y = target ? e.targetY : e.y;
           ctx.beginPath();
-          ctx.arc(pos.x, pos.y, 30 + e.telegraph * 25, 0, TAU);
-          ctx.stroke();
+          for (let i=0;i<=40;i++) {
+            const point=this.project(x+Math.cos(i/40*TAU)*radius,y+Math.sin(i/40*TAU)*radius);
+            if (!i) ctx.moveTo(point.x,point.y); else ctx.lineTo(point.x,point.y);
+          }
+          ctx.closePath(); ctx.fill(); ctx.stroke();
         }
+        ctx.setLineDash([]);
       }
     }
     ctx.font = 'bold 14px monospace';

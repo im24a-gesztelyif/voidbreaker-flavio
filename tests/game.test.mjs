@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 
 // Compile the pure game modules without needing a browser or a test framework.
 const directory = await mkdtemp(join(tmpdir(), 'voidbreaker-tests-'));
-for (const name of ['types','content','simulation','multiplayer']) {
+for (const name of ['types','content','rules','damage-feedback','codec','simulation','multiplayer']) {
   const source = await readFile(new URL(`../lib/game/${name}.ts`, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   await writeFile(join(directory, `${name}.mjs`), outputText.replace(/from '(\.\/[^']+)'/g, "from '$1.mjs'").replace('../network/ice.mjs', pathToFileURL(resolve('lib/network/ice.mjs')).href));
@@ -43,12 +43,12 @@ test('boss kills progress through stations and end in victory', () => {const s=f
 test('rewards include achievement bonuses and are awarded only once', () => {const s=flight();s.state.phase='defeat';const save=freshSave();const result=s.finish(save);assert.equal(result.earned,20);assert.equal(result.save.shards,20);assert.equal(s.finish(result.save).earned,0);});
 test('save loading rejects corrupted values without losing valid selections', () => {const save=loadSave(JSON.stringify({version:1,ship:'wraith',shards:-20,meta:{hull:999},settings:{volume:9}}));assert.equal(save.ship,'wraith');assert.equal(save.shards,0);assert.equal(save.meta.hull,5);assert.equal(save.settings.volume,1);assert.deepEqual(loadSave('broken'),freshSave());});
 test('network input validation rejects non-finite values and clamps movement', () => {assert.equal(cleanInput(input({x:Infinity})),null);assert.equal(cleanInput({}),null);assert.equal(cleanInput(input({x:999})).x,1);});
-test('pointer aim never auto-locks to a target and sync refresh stays at 40Hz', async () => {
+test('pointer aim remains independent while snapshots are capped at 20Hz', async () => {
   const page = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
   const multiplayer = await readFile(new URL('../lib/game/multiplayer.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /coarse\.current\s*\|\|\s*touch\.current\.active/);
-  assert.match(multiplayer, /<\s*25/);
-  assert.doesNotMatch(multiplayer, /<\s*66|<\s*33/);
+  assert.match(multiplayer, /playing' \? 50 : 1000/);
+
 });
 test('guest camera view never mutates the authoritative state', () => {const s=flight(true);const view=guestView(s.state);assert.equal(view.ship,'wraith');assert.equal(view.partnerShip,'kestrel');assert.equal(s.state.ship,'kestrel');assert.equal(view.player,s.state.partner);});
 test('two-client protocol synchronizes runs, pauses, rematches and one-shot inputs', () => {
@@ -68,7 +68,7 @@ test('two-client protocol synchronizes runs, pauses, rematches and one-shot inpu
 });
 
 const fakeConnection = () => Object.assign(new EventEmitter(), {
-  open: false, metadata: { protocol: 2 }, send() {},
+  open: false, metadata: { protocol: 3 }, send() {},
   close() { this.open = false; this.emit('close'); },
 });
 const fakePeer = () => Object.assign(new EventEmitter(), {
@@ -87,7 +87,7 @@ test('signaling reopen preserves active rooms on both sides without duplicate ch
       if (role === 'host') peer.emit('connection', fakeConnection());
       const connection = r.connection;
       connection.open = true; connection.emit('open');
-      connection.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+      connection.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
       r.begin(); const run = r.run;
       peer.emit('error', { type: 'network' }); peer.emit('open');
       assert.equal(r.status, 'connected'); assert.equal(r.connection, connection);
@@ -106,7 +106,7 @@ test('failed and expired handshakes release the host slot; stale events cannot e
     assert.equal(r.connection, undefined); assert.equal(r.status, 'waiting');
     const replacement = fakeConnection(); peer.emit('connection', replacement);
     replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
     failed.emit('close'); failed.emit('data', { type: 'reject', message: 'stale' });
     assert.equal(r.status, 'connected'); assert.equal(r.connection, replacement);
     replacement.close(); assert.equal(r.status, 'waiting'); assert.equal(r.remoteSave, null);
@@ -137,7 +137,121 @@ test('a synchronous hello send failure does not leave an extra heartbeat running
     const replacement = fakeConnection(); let pings = 0;
     replacement.send = data => { if (data.type === 'ping') pings++; };
     peer.emit('connection', replacement); replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
     t.mock.timers.tick(2000); assert.equal(pings, 1);
   } finally { r.dispose(); }
+});
+const { SnapshotEncoder, SnapshotDecoder } = await import(pathToFileURL(join(directory,'codec.mjs')));
+const { DIFFICULTIES } = await import(pathToFileURL(join(directory,'rules.mjs')));
+
+test('all five difficulties progressively raise actual enemy pressure and attack speed', () => {
+  let previous;
+  for (const difficulty of Object.keys(DIFFICULTIES)) {
+    const s=new Simulation('kestrel','pulse',freshSave(),42,difficulty); s.start();
+    const e=s.spawn('lancer',20,20); s.addBullet(0,0,0,10,10,true,'#fff');
+    const current=[e.hp,e.damage,e.speed,s.state.bullets[0].vx];
+    if(previous) current.forEach((v,i)=>assert.ok(v>previous[i],difficulty));
+    previous=current;
+  }
+});
+
+test('endless completes two full circuits without victory, rotates all six bosses, and scales danger', () => {
+  const s=new Simulation('kestrel','pulse',freshSave(),42,'normal',{mode:'endless'});s.start();
+  const variants=new Set(); let initial;
+  for(let i=0;i<7;i++) {
+    const boss=s.spawn('boss',0,10);variants.add(boss.bossVariant);if(i===0)initial=boss.hp;if(i===3)assert.ok(boss.hp>initial);
+    boss.hp=0;s.kill(boss);assert.equal(s.state.phase,'station');s.continueSector();
+    assert.equal(s.state.phase,'playing'); assert.ok(s.state.sector>=0 && s.state.sector<3);
+  }
+  assert.equal(variants.size,6);assert.equal(s.state.loop,2);assert.equal(s.state.sector,1);
+});
+
+test('individual drafts wait for both pilots and reject duplicate, stale, or unoffered choices', () => {
+  const s=flight(true);s.state.sharedUpgrades=false;s.levelUp();const draft=s.state.draftId;
+  const a=s.state.choices[0].id,b=s.state.partnerChoices[0].id;
+  assert.equal(s.chooseUpgrade(a,0,draft),true);assert.equal(s.state.phase,'upgrade');
+  assert.equal(s.chooseUpgrade(a,0,draft),false);assert.equal(s.chooseUpgrade(b,1,draft-1),false);
+  assert.equal(s.chooseUpgrade(b,1,draft),true);assert.equal(s.state.phase,'playing');
+  assert.equal(s.state.upgrades[a],1);assert.equal(s.state.partnerUpgrades[b],1);
+  const view=guestView(s.state);assert.equal(view.upgrades,s.state.partnerUpgrades);
+});
+
+test('independent stats and auxiliary weapons apply only to their owning pilot', () => {
+  const s=flight(true);s.state.sharedUpgrades=false;
+  const hostDamage=s.state.player.damage;s.applyUpgrade('damage',1);s.applyUpgrade('multishot',1);
+  assert.equal(s.state.player.damage,hostDamage);assert.ok(s.state.partner.damage>1.15);
+  frames(s,1,input({firing:true}),input({firing:true}));
+  assert.equal(s.state.bullets.filter(b=>b.owner===0).length,1);
+  assert.ok(s.state.bullets.filter(b=>b.owner===1).length>1);
+  const enemy=s.spawn('drone',10,10);s.activePilot=1;s.kill(enemy);
+  assert.equal(s.state.player.kills,0);assert.equal(s.state.partner.kills,1);assert.equal(s.state.stats.kills,1);
+});
+
+test('exhausted independent drafts resume and shared draft does not repair a non-maxed wingmate', () => {
+  const s=flight(true);s.state.partner.hp=10;s.levelUp();assert.equal(s.state.partner.hp,10);
+  s.state.sharedUpgrades=false;for(const u of UPGRADES){s.state.upgrades[u.id]=u.max;s.state.partnerUpgrades[u.id]=u.max;}
+  s.openDraft();assert.equal(s.state.phase,'playing');assert.equal(s.state.partner.hp,s.state.partner.maxHp);
+});
+
+test('new enemies warn before attacks and carriers cannot create unbounded swarms', () => {
+  for(const kind of ['lancer','brood','anchor']) {
+    const s=flight();const e=s.spawn(kind,10,10);e.age=2;e.cooldown=0;
+    s.updateEnemy(e,1/60);assert.ok(e.telegraph>=.75);assert.equal(s.state.bullets.length,0);
+    for(let i=0;i<180;i++)s.updateEnemy(e,1/60);
+    assert.ok(kind==='brood'?s.state.enemies.some(x=>x.kind==='swarm'):s.state.bullets.length>0);
+  }
+  const s=flight();for(let i=0;i<1000;i++)s.spawn('swarm',0,0);assert.equal(s.state.enemies.length,80);
+});
+
+test('compact snapshots retain stable metadata, preserve guest visuals, and reject corrupt rows', () => {
+  const s=flight(true),encoder=new SnapshotEncoder(),decoder=new SnapshotDecoder();
+  s.state.sharedUpgrades=false;s.state.mode='endless';s.applyUpgrade('orbitals',1);s.spawn('anchor',12.123,9);
+  const first=encoder.encode(s.state);const decoded=decoder.decode(first);assert.equal(decoded.mode,'endless');assert.equal(decoded.enemies[0].kind,'anchor');assert.equal(decoded.partnerUpgrades.orbitals,1);
+  s.state.time=.05;s.state.spawnTimer=5;const second=encoder.encode(s.state);assert.equal(second.meta,undefined);assert.equal(decoder.decode(second).mode,'endless');
+  s.state.phase='paused';assert.equal(decoder.decode(encoder.encode(s.state)).phase,'paused');
+  const broken=structuredClone(second);broken.p[0]=NaN;assert.equal(decoder.decode(broken),null);
+  assert.equal(new SnapshotDecoder().decode(second),null);
+});
+
+test('compact 20Hz traffic is substantially smaller than full 40Hz snapshots in a busy scene', async () => {
+  const { pack }=await import('peerjs-js-binarypack');
+  const s=flight(true);for(let i=0;i<30;i++)s.spawn('drone',i,20);
+  for(let i=0;i<120;i++)s.addBullet(i/4,10,.3,12,20,i%2===0,'#ff7755');
+  const encoder=new SnapshotEncoder();encoder.encode(s.state);
+  const bytes=value=>pack(value).byteLength;
+  const full=bytes({type:'state',run:'a'.repeat(32),state:s.state})*40;
+  const compact=bytes({type:'state',run:'a'.repeat(32),frame:encoder.encode(s.state)})*20;
+  assert.ok(compact<full*.35,`${compact} vs ${full}`);
+  console.log(`Busy-scene payload: ${Math.round(full/1024)} KiB/s before, ${Math.round(compact/1024)} KiB/s now (${Math.round(100*(1-compact/full))}% reduction; excludes transport overhead).`);
+});
+
+test('chain and explosion cascades award each death exactly once', () => {
+  const s=flight();s.applyUpgrade('chain');s.applyUpgrade('explode');s.random=()=>0;
+  const a=s.spawn('drone',25,25),b=s.spawn('drone',25,25);a.age=b.age=2;a.hp=50;b.hp=5;
+  s.damageEnemy(a,40,true);assert.equal(s.state.stats.kills,2);assert.equal(s.state.player.kills,2);
+  const loot=s.state.pickups.length;s.kill(a);assert.equal(s.state.pickups.length,loot);
+});
+
+test('room settings persist through loadout updates and guest module requests reach host validation', () => {
+  const s=flight(true);s.state.sharedUpgrades=false;s.levelUp();let snapshot;
+  const host=new Multiplayer({change(){},snapshot(){},pause(){},save:freshSave,choose:(id,draft)=>id===null?s.reroll(1,draft):s.chooseUpgrade(id,1,draft)});
+  const guest=new Multiplayer({change(){},snapshot:value=>snapshot=value,pause(){},save:freshSave});
+  host.role='host';guest.role='guest';host.status=guest.status='connected';
+  host.connection={open:true,dataChannel:{bufferedAmount:0},send:data=>guest.receive(structuredClone(data))};
+  guest.connection={open:true,dataChannel:{bufferedAmount:0},send:data=>host.receive(structuredClone(data))};
+  host.configure({mode:'endless',difficulty:'ace',sharedUpgrades:false,sharedKills:false});host.updateLoadout();assert.deepEqual(guest.options,host.options);
+  guest.configure({difficulty:'easy'});assert.equal(host.options.difficulty,'ace');
+  host.begin();host.broadcast(s.state,true);const choice=snapshot.choices[0].id;
+  guest.choose(choice,snapshot.draftId-1);assert.equal(s.state.partnerUpgrades[choice],undefined);
+  guest.choose(choice,snapshot.draftId);assert.equal(s.state.partnerUpgrades[choice],1);
+  guest.choose(choice,snapshot.draftId);assert.equal(s.state.partnerUpgrades[choice],1);
+});
+
+test('damage feedback distinguishes shield, hull and overflow hits for mutable and network states', async () => {
+  const {DamageFeedback}=await import(pathToFileURL(join(directory,'damage-feedback.mjs')));
+  const s=flight(),f=new DamageFeedback();f.update(s.state,0);
+  s.state.player.shield-=10;f.update(s.state,.016);assert.ok(f.shield>0);assert.equal(f.hull,0);
+  const snapshot=structuredClone(s.state);snapshot.player.hp-=5;f.update(snapshot,.016);assert.ok(f.hull>0);
+  f.update(snapshot,1);assert.equal(f.hull,0);assert.equal(f.shield,0);
+  snapshot.phase='menu';f.update(snapshot,0);snapshot.phase='playing';snapshot.player.hp=20;f.update(snapshot,0);assert.equal(f.hull,0);
 });

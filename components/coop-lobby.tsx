@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { Users, Copy, Check, ArrowUpRight, X, Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DIFFICULTIES } from '@/lib/game/rules';
+import type { Difficulty, GameMode } from '@/lib/game/types';
 import { SHIPS } from '@/lib/game/content';
 import { normalizeCode } from '@/lib/game/multiplayer';
 import type { Multiplayer } from '@/lib/game/multiplayer';
@@ -13,6 +15,7 @@ export function CoopLobby({
   ready,
   save,
   initialCode,
+  loadout,
   connect,
   leave,
   close,
@@ -22,6 +25,7 @@ export function CoopLobby({
   room: Multiplayer | null;
   save: SaveData;
   initialCode: string;
+  loadout: React.ReactNode;
   connect: (role: 'host' | 'guest', code?: string) => void;
   leave: () => void;
   close: () => void;
@@ -64,9 +68,9 @@ export function CoopLobby({
         </div>
         <h2 id="coop-title">BRING A WINGMATE.</h2>
         <p>
-          Fight through all three sectors together. Independent ships. Shared
-          loot and upgrades.
+          Take on the campaign or fly into endless space. The commander sets the rules.
         </p>
+        <details className="lobby-loadout"><summary>YOUR SHIP & WEAPON</summary>{loadout}</details>
         {room?.message && (
           <p className="connection-error" role="alert">
             {room.message}
@@ -106,6 +110,12 @@ export function CoopLobby({
                     : 'Share your code or invite link'}
                 </small>
               </div>
+            </div>
+            <div className="run-config room-settings">
+              <label>MISSION<select aria-label="Room mission" disabled={room.role !== 'host'} value={room.options.mode} onChange={e => room.configure({mode:e.target.value as GameMode})}><option value="campaign">Campaign</option><option value="endless">Endless</option></select></label>
+              <label>DIFFICULTY<select aria-label="Room difficulty" disabled={room.role !== 'host'} value={room.options.difficulty} onChange={e => room.configure({difficulty:e.target.value as Difficulty})}>{Object.entries(DIFFICULTIES).map(([id,d]) => <option key={id} value={id}>{d.name}</option>)}</select></label>
+              <label>POWER-UPS<select aria-label="Power-ups" disabled={room.role !== 'host'} value={String(room.options.sharedUpgrades)} onChange={e => room.configure({sharedUpgrades:e.target.value === 'true'})}><option value="true">Shared · Commander chooses</option><option value="false">Individual · Each pilot chooses</option></select></label>
+              <label>KILL DISPLAY<select aria-label="Kill display" disabled={room.role !== 'host'} value={String(room.options.sharedKills)} onChange={e => room.configure({sharedKills:e.target.value === 'true'})}><option value="true">Shared team count</option><option value="false">Separate pilot counts</option></select></label>
             </div>
             {room.role === 'host' ? (
               <Button
@@ -175,8 +185,7 @@ export function CoopLobby({
             wave. The run ends when both pilots fall.
           </p>
           <p>
-            <b>Build as a team.</b> The commander picks upgrades and station
-            purchases for both ships. Either pilot can pause.
+            <b>Build as a team.</b> Choose shared modules or build each ship independently. XP, scrap, and station supplies stay shared. Either pilot can pause.
           </p>
           <p>
             Keep both game tabs open. Online play needs an internet connection;
