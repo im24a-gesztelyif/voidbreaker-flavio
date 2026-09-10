@@ -390,6 +390,10 @@ export const ENEMY_DATA: Record<
     color: '#ff8552',
     name: 'Sector Core',
   },
+  lancer: { hp: 62, speed: 4.8, damage: 19, radius: 1.35, xp: 13, color: '#ffe08a', name: 'Needle Lancer' },
+  brood: { hp: 135, speed: 2.8, damage: 15, radius: 2.2, xp: 24, color: '#a5f789', name: 'Brood Ark' },
+  manta: { hp: 72, speed: 8, damage: 12, radius: 1.7, xp: 15, color: '#82d8ff', name: 'Veil Manta' },
+  anchor: { hp: 95, speed: 3.3, damage: 24, radius: 1.65, xp: 20, color: '#f795d9', name: 'Rift Anchor' },
 };
 export const ACHIEVEMENTS = [
   {

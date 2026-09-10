@@ -9,7 +9,7 @@ import { EventEmitter } from 'node:events';
 
 // Compile the pure game modules without needing a browser or a test framework.
 const directory = await mkdtemp(join(tmpdir(), 'voidbreaker-tests-'));
-for (const name of ['types','content','simulation','multiplayer']) {
+for (const name of ['types','content','rules','codec','simulation','multiplayer']) {
   const source = await readFile(new URL(`../lib/game/${name}.ts`, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   await writeFile(join(directory, `${name}.mjs`), outputText.replace(/from '(\.\/[^']+)'/g, "from '$1.mjs'").replace('../network/ice.mjs', pathToFileURL(resolve('lib/network/ice.mjs')).href));
@@ -43,12 +43,12 @@ test('boss kills progress through stations and end in victory', () => {const s=f
 test('rewards include achievement bonuses and are awarded only once', () => {const s=flight();s.state.phase='defeat';const save=freshSave();const result=s.finish(save);assert.equal(result.earned,20);assert.equal(result.save.shards,20);assert.equal(s.finish(result.save).earned,0);});
 test('save loading rejects corrupted values without losing valid selections', () => {const save=loadSave(JSON.stringify({version:1,ship:'wraith',shards:-20,meta:{hull:999},settings:{volume:9}}));assert.equal(save.ship,'wraith');assert.equal(save.shards,0);assert.equal(save.meta.hull,5);assert.equal(save.settings.volume,1);assert.deepEqual(loadSave('broken'),freshSave());});
 test('network input validation rejects non-finite values and clamps movement', () => {assert.equal(cleanInput(input({x:Infinity})),null);assert.equal(cleanInput({}),null);assert.equal(cleanInput(input({x:999})).x,1);});
-test('pointer aim never auto-locks to a target and sync refresh stays at 40Hz', async () => {
+test('pointer aim remains independent while snapshots are capped at 20Hz', async () => {
   const page = await readFile(new URL('../app/page.tsx', import.meta.url), 'utf8');
   const multiplayer = await readFile(new URL('../lib/game/multiplayer.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /coarse\.current\s*\|\|\s*touch\.current\.active/);
-  assert.match(multiplayer, /<\s*25/);
-  assert.doesNotMatch(multiplayer, /<\s*66|<\s*33/);
+  assert.match(multiplayer, /playing' \? 50 : 1000/);
+
 });
 test('guest camera view never mutates the authoritative state', () => {const s=flight(true);const view=guestView(s.state);assert.equal(view.ship,'wraith');assert.equal(view.partnerShip,'kestrel');assert.equal(s.state.ship,'kestrel');assert.equal(view.player,s.state.partner);});
 test('two-client protocol synchronizes runs, pauses, rematches and one-shot inputs', () => {
@@ -68,7 +68,7 @@ test('two-client protocol synchronizes runs, pauses, rematches and one-shot inpu
 });
 
 const fakeConnection = () => Object.assign(new EventEmitter(), {
-  open: false, metadata: { protocol: 2 }, send() {},
+  open: false, metadata: { protocol: 3 }, send() {},
   close() { this.open = false; this.emit('close'); },
 });
 const fakePeer = () => Object.assign(new EventEmitter(), {
@@ -87,7 +87,7 @@ test('signaling reopen preserves active rooms on both sides without duplicate ch
       if (role === 'host') peer.emit('connection', fakeConnection());
       const connection = r.connection;
       connection.open = true; connection.emit('open');
-      connection.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+      connection.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
       r.begin(); const run = r.run;
       peer.emit('error', { type: 'network' }); peer.emit('open');
       assert.equal(r.status, 'connected'); assert.equal(r.connection, connection);
@@ -106,7 +106,7 @@ test('failed and expired handshakes release the host slot; stale events cannot e
     assert.equal(r.connection, undefined); assert.equal(r.status, 'waiting');
     const replacement = fakeConnection(); peer.emit('connection', replacement);
     replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
     failed.emit('close'); failed.emit('data', { type: 'reject', message: 'stale' });
     assert.equal(r.status, 'connected'); assert.equal(r.connection, replacement);
     replacement.close(); assert.equal(r.status, 'waiting'); assert.equal(r.remoteSave, null);
@@ -137,7 +137,7 @@ test('a synchronous hello send failure does not leave an extra heartbeat running
     const replacement = fakeConnection(); let pings = 0;
     replacement.send = data => { if (data.type === 'ping') pings++; };
     peer.emit('connection', replacement); replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 2, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 3, save: freshSave() });
     t.mock.timers.tick(2000); assert.equal(pings, 1);
   } finally { r.dispose(); }
 });

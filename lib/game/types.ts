@@ -1,6 +1,15 @@
 export type Vec = { x: number; y: number };
 export type ShipId = 'kestrel' | 'wraith' | 'bastion';
 export type WeaponId = 'pulse' | 'scatter' | 'rail';
+export type Difficulty = 'easy' | 'normal' | 'hard' | 'veteran' | 'ace';
+export type GameMode = 'campaign' | 'endless';
+export type PilotId = 0 | 1;
+export interface RoomOptions {
+  mode: GameMode;
+  difficulty: Difficulty;
+  sharedUpgrades: boolean;
+  sharedKills: boolean;
+}
 export type EnemyKind =
   | 'drone'
   | 'striker'
@@ -8,6 +17,10 @@ export type EnemyKind =
   | 'bomber'
   | 'warden'
   | 'swarm'
+  | 'lancer'
+  | 'brood'
+  | 'manta'
+  | 'anchor'
   | 'boss';
 export type Phase =
   | 'menu'
@@ -83,6 +96,8 @@ export interface SectorDef {
   narrative: string;
 }
 export interface Enemy extends Vec {
+  bossVariant: number;
+  telegraphKind: 'line' | 'target' | 'ring' | 'cross';
   id: number;
   kind: EnemyKind;
   hp: number;
@@ -105,6 +120,7 @@ export interface Enemy extends Vec {
   targetY: number;
 }
 export interface Bullet extends Vec {
+  owner?: PilotId;
   id: number;
   vx: number;
   vy: number;
@@ -144,6 +160,7 @@ export interface Effect extends Vec {
   text?: string;
 }
 export interface Player extends Vec {
+  kills: number;
   vx: number;
   vy: number;
   angle: number;
@@ -191,6 +208,14 @@ export interface RunStats {
   maxCombo: number;
 }
 export interface GameState {
+  mode: GameMode;
+  loop: number;
+  sharedUpgrades: boolean;
+  sharedKills: boolean;
+  partnerUpgrades: Partial<Record<UpgradeId, number>>;
+  partnerChoices: UpgradeDef[];
+  partnerRerolls: number;
+  draftId: number;
   partner?: Player;
   partnerShip?: ShipId;
   partnerWeapon?: WeaponId;
@@ -222,7 +247,7 @@ export interface GameState {
   bannerSub: string;
   bannerTime: number;
   seed: number;
-  difficulty: 'normal' | 'hard';
+  difficulty: Difficulty;
   autoFire: boolean;
   screenShake: number;
   stationBought: string[];
