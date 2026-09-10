@@ -14,9 +14,15 @@ const dynamic = 'time totalTime waveTime intermission bannerTime screenShake com
 const omitted = new Set(['player','partner','enemies','bullets','pickups','effects','stats','spawnTimer',...dynamic]);
 const row = (value: object, keys: string[]): Row => keys.map(k => {
   const v = (value as Record<string, unknown>)[k];
+<<<<<<< HEAD
   return typeof v === 'number' ? Math.round(v * 100) : (v ?? null) as Row[number];
 });
 const object = (values: Row, keys: string[]) => Object.fromEntries(keys.map((k,i) => [k, typeof values[i] === 'number' ? (values[i] as number) / 100 : values[i] ?? undefined]));
+=======
+  return typeof v === 'number' ? Math.round(v * 100) / 100 : (v ?? null) as Row[number];
+});
+const object = (values: Row, keys: string[]) => Object.fromEntries(keys.map((k,i) => [k, values[i] ?? undefined]));
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
 export class SnapshotEncoder {
   private signature = '';
   reset() { this.signature = ''; }
@@ -38,6 +44,7 @@ export class SnapshotDecoder {
   decode(value: unknown): GameState | null {
     if (!value || typeof value !== 'object') return null;
     const f = value as Frame;
+<<<<<<< HEAD
     const valid = (r: unknown, keys: string[]) => Array.isArray(r) && r.length === keys.length && r.every((v,i) => {
       const key = keys[i];
       if (['kind','color','type','telegraphKind','text'].includes(key)) return (key === 'text' && v === null) || (typeof v === 'string' && v.length <= 300);
@@ -45,13 +52,19 @@ export class SnapshotDecoder {
       if ((key === 'targetX' || key === 'targetY') && v === null && keys === fields.effects) return true;
       return typeof v === 'number' && Number.isSafeInteger(v);
     });
+=======
+    const valid = (r: unknown, keys: string[]) => Array.isArray(r) && r.length === keys.length && r.every(v => v === null || typeof v === 'boolean' || (typeof v === 'string' && v.length <= 300) || (typeof v === 'number' && Number.isFinite(v)));
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
     if (!valid(f.p, fields.player) || !valid(f.q, fields.player) || !Array.isArray(f.d) || f.d.length !== dynamic.length || !f.d.every(Number.isFinite)) return null;
     for (const [key, name, max] of [['e','enemies',100],['b','bullets',700],['i','pickups',1000],['f','effects',500]] as const)
       if (!Array.isArray(f[key]) || f[key].length > max || !f[key].every(r => valid(r,fields[name]))) return null;
     const meta = f.meta || this.meta;
     if (!meta || !['playing','paused','upgrade','station','victory','defeat'].includes(meta.phase!) || !Number.isInteger(meta.sector) || meta.sector! < 0 || meta.sector! > 2 || !f.stats) return null;
+<<<<<<< HEAD
     if (!['kestrel','wraith','bastion'].includes(meta.ship!) || !['kestrel','wraith','bastion'].includes(meta.partnerShip!) || !['pulse','scatter','rail'].includes(meta.weapon!) || !['pulse','scatter','rail'].includes(meta.partnerWeapon!)) return null;
     if (!f.e.every(r => ['drone','striker','gunner','bomber','warden','swarm','lancer','brood','manta','anchor','boss'].includes(r[1] as string) && (r[15] as number) >= 0 && (r[15] as number) <= 500)) return null;
+=======
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
     this.meta = meta;
     return { ...meta, ...Object.fromEntries(dynamic.map((k,i) => [k,f.d[i]])), stats: f.stats,
       player: object(f.p,fields.player), partner: object(f.q!,fields.player),

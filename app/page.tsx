@@ -735,7 +735,57 @@ export default function Home() {
               <span>SHIELD {selected.shield}</span>
             </div>
           </div>
+<<<<<<< HEAD
 
+=======
+          <section className="hangar-bottom">
+            <div className="run-config">
+              <label>MISSION<select aria-label="Mission mode" value={mode} onChange={e => setMode(e.target.value as GameMode)}><option value="campaign">Campaign · Three sectors</option><option value="endless">Endless · No final jump</option></select></label>
+              <label>DIFFICULTY<select aria-label="Difficulty" value={difficulty} onChange={e => setDifficulty(e.target.value as Difficulty)}>{Object.entries(DIFFICULTIES).map(([id,d]) => <option key={id} value={id}>{d.name}</option>)}</select></label>
+              <p>{DIFFICULTIES[difficulty].description} {mode === 'endless' && 'Every circuit brings stronger enemies and a new boss rotation.'}</p>
+            </div>
+            <div className="loadout-head">
+              <span>YOUR SHIP</span>
+              <span>HANGAR / 03 SHIPS</span>
+            </div>
+            <Tabs value={ship} onValueChange={(v) => option(v as ShipId)}>
+              <TabsList className="ship-list">
+                {SHIPS.map((x, i) => (
+                  <TabsTrigger className="ship-card" value={x.id} key={x.id}>
+                    <span className="ship-num">0{i + 1}</span>
+                    <div>
+                      <strong>{x.name}</strong>
+                      <small>{x.role}</small>
+                    </div>
+                    <ChevronRight size={16} />
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <div className="hangar-bottom-row">
+              <div className="weapon-select">
+                {WEAPONS.map((w) => (
+                  <button
+                    key={w.id}
+                    title={w.description}
+                    onClick={() => {
+                      persist({ ...save, weapon: w.id });
+                      room.current?.updateLoadout();
+                    }}
+                    className={weapon === w.id ? 'selected' : ''}
+                  >
+                    <Crosshair size={13} />
+                    {w.name}
+                  </button>
+                ))}
+              </div>
+              <div className="controls-hint">
+                <kbd>W A S D</kbd> MOVE <kbd>MOUSE</kbd> AIM <kbd>SPACE</kbd>{' '}
+                DASH
+              </div>
+            </div>
+          </section>
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
         </>
       )}
       {!menu && (

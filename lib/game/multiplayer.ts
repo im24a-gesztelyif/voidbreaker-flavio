@@ -407,7 +407,11 @@ export class Multiplayer {
   }
   updateLoadout() {
     if (!this.run)
+<<<<<<< HEAD
       this.send({ type: 'hello', protocol: 3, save: this.callbacks.save(), ...(this.role === 'host' ? {options: this.options} : {}) });
+=======
+      this.send({ type: 'hello', protocol: 3, save: this.callbacks.save() });
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
   }
   configure(options: Partial<RoomOptions>) {
     if (this.role !== 'host' || this.run) return;

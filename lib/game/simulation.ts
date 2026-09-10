@@ -644,11 +644,18 @@ export class Simulation {
       pos.x = -s.player.x * 0.7 + Math.cos(a) * 12;
       pos.y = -s.player.y * 0.7 + Math.sin(a) * 12;
     }
+<<<<<<< HEAD
     const depth = sectorNumber(s) - 1;
     const scale = (1 + depth * .55) * this.rules.health;
     const baseHp =
       kind === 'boss'
         ? (2100 + 1900 * depth + 225 * depth * depth) * this.rules.health
+=======
+    const scale = (1 + s.sector * .55 + s.loop * 1.2) * this.rules.health;
+    const baseHp =
+      kind === 'boss'
+        ? [2100, 4200, 6800][s.sector] * this.rules.health * (1 + s.loop * 1.25)
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
         : data.hp * scale * (elite ? 2.5 : 1);
     const hp = baseHp * (s.partner ? 1.65 : 1);
     const e: Enemy = {
@@ -663,7 +670,12 @@ export class Simulation {
       speed: data.speed * this.rules.speed * Math.min(1.4, 1 + s.loop * .045),
       damage:
         data.damage *
+<<<<<<< HEAD
         (1 + depth * 0.16) * this.rules.damage,
+=======
+        (1 + s.sector * 0.16) *
+        this.rules.damage * (1 + s.loop * .22),
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
       angle: angleTo(pos, s.player),
       cooldown: 1.5 + this.random(),
       age: 0,
@@ -1097,8 +1109,11 @@ export class Simulation {
     if (e.hp <= 0) this.kill(e);
   }
   private kill(e: Enemy, suppressExplosion = false) {
+<<<<<<< HEAD
     if (e.deathProcessed) return;
     e.deathProcessed = true;
+=======
+>>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
     const s = this.state,
       p = this.activePilot === 1 && s.partner ? s.partner : s.player;
     s.stats.kills++;
