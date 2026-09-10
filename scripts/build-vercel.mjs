@@ -1,3 +1,4 @@
+import './check-conflicts.mjs';
 import { spawnSync } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

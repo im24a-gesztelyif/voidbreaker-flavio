@@ -96,10 +96,7 @@ export interface SectorDef {
   narrative: string;
 }
 export interface Enemy extends Vec {
-<<<<<<< HEAD
   deathProcessed?: boolean;
-=======
->>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
   bossVariant: number;
   telegraphKind: 'line' | 'target' | 'ring' | 'cross';
   id: number;
