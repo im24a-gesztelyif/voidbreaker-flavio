@@ -9,11 +9,7 @@ import { EventEmitter } from 'node:events';
 
 // Compile the pure game modules without needing a browser or a test framework.
 const directory = await mkdtemp(join(tmpdir(), 'voidbreaker-tests-'));
-<<<<<<< HEAD
 for (const name of ['types','content','rules','damage-feedback','codec','simulation','multiplayer']) {
-=======
-for (const name of ['types','content','rules','codec','simulation','multiplayer']) {
->>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
   const source = await readFile(new URL(`../lib/game/${name}.ts`, import.meta.url), 'utf8');
   const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   await writeFile(join(directory, `${name}.mjs`), outputText.replace(/from '(\.\/[^']+)'/g, "from '$1.mjs'").replace('../network/ice.mjs', pathToFileURL(resolve('lib/network/ice.mjs')).href));

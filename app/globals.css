@@ -2003,7 +2003,6 @@ body {
  .boss-hud { left:29%; right:26%; }
  .boss-hud span { font-size:10px; }
 }
-<<<<<<< HEAD
 .flight-setup { width:100%; margin:24px 0; text-align:left; }
 .flight-setup .ship-list { width:100%; }
 .flight-setup .hangar-bottom-row { flex-wrap:wrap; gap:12px; }
@@ -2028,5 +2027,3 @@ body {
 .flight-setup .ship-card strong { font-size:16px; }
 @media (min-width:601px) and (max-width:900px) { .ship-preview { flex-basis:58px; width:58px; } }
 @media (max-width:600px) { .flight-setup .ship-card { min-height:84px; } .flight-setup .ship-card > div { display:block; text-align:left; } }
-=======
->>>>>>> b8f51e1edfa8d796a1381972caf7d0705a7aa6bc
