@@ -195,7 +195,7 @@ export default function Home() {
     refresh();
   };
   const hangar = () => {
-    leaveRoom();
+    room.current?.returnToHangar();
     sim.current = new Simulation(
       saveRef.current.ship,
       saveRef.current.weapon,

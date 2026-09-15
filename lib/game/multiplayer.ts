@@ -16,6 +16,7 @@ export type RoomStatus =
   | 'connected'
   | 'disconnected'
   | 'error';
+export const MAX_PARTY_PLAYERS = 4;
 export const neutralInput = (): GameInput => ({
   x: 0,
   y: 0,
@@ -81,6 +82,7 @@ export class Multiplayer {
   code = '';
   message = '';
   remoteSave: SaveData | null = null;
+  partySize = 1;
   run = '';
   latency = 0;
   relayAvailable = false;
@@ -91,6 +93,7 @@ export class Multiplayer {
   private lastSentInput = '';
   private peer?: Peer;
   private connection?: DataConnection;
+  private connections = new Set<DataConnection>();
   private timer?: ReturnType<typeof setInterval>;
   private timeout?: ReturnType<typeof setTimeout>;
   private handshakeTimeout?: ReturnType<typeof setTimeout>;
@@ -214,7 +217,7 @@ export class Multiplayer {
       }
       if (
         this.role !== 'host' ||
-        this.connection ||
+        this.connections.size >= MAX_PARTY_PLAYERS - 1 ||
         this.run ||
         c.metadata?.protocol !== 3
       ) {
@@ -274,13 +277,15 @@ export class Multiplayer {
     }, this.reconnectDelay);
   }
   private attach(c: DataConnection) {
-    this.connection = c;
+    this.connections.add(c);
+    if (!this.connection) this.connection = c;
+    this.partySize = this.connections.size + 1;
     this.handshakeTimeout = setTimeout(() => this.connectionFailed(c), 20000);
     c.on('open', () => {
-      if (this.connection !== c || this.disposed) return;
+      if (!this.connections.has(c) || this.disposed) return;
       this.lastSeen = Date.now();
       this.send({ type: 'hello', protocol: 3, save: this.callbacks.save(), ...(this.role === 'host' ? {options: this.options} : {}) });
-      if (this.connection !== c) return;
+      if (!this.connections.has(c)) return;
       this.timer = setInterval(() => {
         if (Date.now() - this.lastSeen > 30000) {
           this.connectionFailed(c);
@@ -290,22 +295,28 @@ export class Multiplayer {
       }, 2000);
     });
     c.on('data', (data) => {
-      if (this.connection === c) this.receive(data);
+      if (this.connections.has(c)) this.receive(data);
     });
     c.on('close', () => this.connectionFailed(c));
     c.on('error', () => this.connectionFailed(c));
   }
   private connectionFailed(c: DataConnection) {
-    if (this.disposed || this.connection !== c || this.status === 'error')
+    if (this.disposed || !this.connections.has(c) || this.status === 'error')
       return;
+    const wasPrimary = this.connection === c;
+    this.connections.delete(c);
+    if (wasPrimary) this.connection = this.connections.values().next().value;
+    this.partySize = this.connections.size + 1;
+    if (this.role === 'host' && this.run && !wasPrimary) return;
     if (this.role === 'host' && !this.run) {
       // A cancelled/failed join must not reserve the only wingmate slot forever.
-      this.releaseConnection();
+      clearInterval(this.timer);
+      clearTimeout(this.handshakeTimeout);
+      c.close();
       this.remoteSave = null;
-      this.update(
-        'waiting',
-        'Your wingmate disconnected. They can join again using this code.',
-      );
+      this.update(this.connections.size ? 'connected' : 'waiting', this.connections.size
+        ? ''
+        : 'Your party member disconnected. They can join again using this code.');
     } else {
       this.fail(
         !this.run && !this.relayAvailable
@@ -317,9 +328,15 @@ export class Multiplayer {
   private releaseConnection() {
     clearInterval(this.timer);
     clearTimeout(this.handshakeTimeout);
-    const c = this.connection;
+    const connections = this.connections.size
+      ? [...this.connections]
+      : this.connection
+        ? [this.connection]
+        : [];
     this.connection = undefined;
-    c?.close();
+    this.connections.clear();
+    this.partySize = 1;
+    connections.forEach((connection) => connection.close());
   }
   private receive(data: unknown) {
     if (!data || typeof data !== 'object' || this.disposed) return;
@@ -349,6 +366,12 @@ export class Multiplayer {
     }
     if (m.type === 'pong' && typeof m.time === 'number') {
       this.latency = Math.max(0, Date.now() - m.time);
+      return;
+    }
+    if (m.type === 'hangar') {
+      this.clearRun();
+      this.callbacks.pause();
+      if (this.role === 'host') this.send({ type: 'hangar' });
       return;
     }
     if (m.type === 'hello' && m.protocol === 3) {
@@ -395,8 +418,13 @@ export class Multiplayer {
     }
   }
   send(data: unknown) {
-    const connection = this.connection;
-    if (connection?.open) {
+    const connections = this.connections.size
+      ? this.connections
+      : this.connection
+        ? new Set([this.connection])
+        : new Set<DataConnection>();
+    for (const connection of connections) {
+      if (!connection.open) continue;
       try {
         const sent = connection.send(data);
         if (sent) void sent.catch(() => this.connectionFailed(connection));
@@ -419,6 +447,7 @@ export class Multiplayer {
     this.send({type: id === null ? 'reroll' : 'choose', id, draft, run: this.run});
   }
   begin() {
+    this.clearRun();
     this.encoder.reset();
     this.snapshotAt = 0;
     this.run = Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) =>
@@ -427,6 +456,19 @@ export class Multiplayer {
     this.received = -1;
     this.input = neutralInput();
     this.lastInput = 0;
+  }
+  private clearRun() {
+    this.run = '';
+    this.encoder.reset();
+    this.snapshotAt = 0;
+    this.received = -1;
+    this.input = neutralInput();
+    this.pending = neutralInput();
+    this.lastInput = 0;
+  }
+  returnToHangar() {
+    if (this.status === 'connected') this.send({ type: 'hangar' });
+    this.clearRun();
   }
   broadcast(state: GameState, force = false) {
     if (this.role !== 'host' || !this.run || this.status !== 'connected')

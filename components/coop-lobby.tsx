@@ -64,9 +64,9 @@ export function CoopLobby({
           <X />
         </Button>
         <div className="eyebrow">
-          <Users size={16} /> TWO PILOTS. ONE MISSION.
+          <Users size={16} /> UP TO FOUR PILOTS. ONE MISSION.
         </div>
-        <h2 id="coop-title">BRING A WINGMATE.</h2>
+        <h2 id="coop-title">BRING YOUR PARTY.</h2>
         <p>
           Take on the campaign or fly into endless space. The commander sets the rules.
         </p>
@@ -84,6 +84,7 @@ export function CoopLobby({
             <div className="room-code">
               <span>ROOM CODE</span>
               <strong>{room.code}</strong>
+              <small>{room.partySize}/4 PILOTS IN PARTY</small>
               <Button variant="outline" onClick={copy}>
                 {copied ? <Check size={16} /> : <Copy size={16} />}{' '}
                 {copied ? 'LINK COPIED' : 'COPY INVITE'}
