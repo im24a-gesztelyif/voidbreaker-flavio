@@ -13,7 +13,7 @@ import type { SaveData } from '@/lib/game/types';
 export function CoopLobby({
   room,
   ready,
-  save,
+  save: _save,
   initialCode,
   loadout,
   connect,
@@ -91,26 +91,15 @@ export function CoopLobby({
               </Button>
             </div>
             <div className="crew-grid">
-              <div>
-                <span>
-                  {room.role === 'host' ? 'COMMANDER' : 'WINGMATE'} / YOU
-                </span>
-                <strong>{SHIPS.find((s) => s.id === save.ship)?.name}</strong>
-                <small>READY TO FLY</small>
-              </div>
-              <div className={!room.remoteSave ? 'crew-empty' : ''}>
-                <span>{room.role === 'host' ? 'WINGMATE' : 'COMMANDER'}</span>
-                <strong>
-                  {room.remoteSave
-                    ? SHIPS.find((s) => s.id === room.remoteSave?.ship)?.name
-                    : 'AWAITING SIGNAL'}
-                </strong>
-                <small>
-                  {room.remoteSave
-                    ? 'CONNECTED'
-                    : 'Share your code or invite link'}
-                </small>
-              </div>
+              {[0,1,2,3].map(slot=>{
+                const member=room.members.find(m=>m.slot===slot);
+                const own=slot===(room.role==='host'?0:room.slot);
+                return <div key={slot} className={member?'':'crew-empty'} data-slot={slot}>
+                  <span>{slot===0?'COMMANDER':`PILOT ${slot+1}`}{own?' / YOU':''}</span>
+                  <strong>{member?SHIPS.find(s=>s.id===member.save.ship)?.name:'OPEN SLOT'}</strong>
+                  <small>{member?'READY TO FLY':'Share your code or invite link'}</small>
+                </div>;
+              })}
             </div>
             <div className="run-config room-settings">
               <label>MISSION<select aria-label="Room mission" disabled={room.role !== 'host'} value={room.options.mode} onChange={e => room.configure({mode:e.target.value as GameMode})}><option value="campaign">Campaign</option><option value="endless">Endless</option></select></label>
@@ -121,7 +110,7 @@ export function CoopLobby({
             {room.role === 'host' ? (
               <Button
                 className="launch"
-                disabled={room.status !== 'connected' || !room.remoteSave}
+                disabled={!ready || !room.canLaunch}
                 onClick={launch}
               >
                 LAUNCH TOGETHER <ArrowUpRight />
@@ -183,13 +172,13 @@ export function CoopLobby({
         <div className="coop-rules">
           <p>
             <b>Stay together.</b> A downed ship returns at the next cleared
-            wave. The run ends when both pilots fall.
+            wave. The run ends when all pilots fall.
           </p>
           <p>
             <b>Build as a team.</b> Choose shared modules or build each ship independently. XP, scrap, and station supplies stay shared. Either pilot can pause.
           </p>
           <p>
-            Keep both game tabs open. Online play needs an internet connection;
+            Keep all game tabs open. Online play needs an internet connection;
             some restricted networks may prevent a connection.
           </p>
         </div>

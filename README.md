@@ -1,6 +1,6 @@
 # VOIDBREAKER — The Last Light
 
-A Three.js space roguelite with solo and online two-player cooperative runs. Fly one of three ships, choose one of three weapons, and build your arsenal through a three-sector campaign or an endless expedition. All game text is in English. Existing browser saves remain compatible.
+A Three.js space roguelite with solo and online two-to-four-player cooperative runs. Fly one of three ships, choose one of three weapons, and build your arsenal through a three-sector campaign or an endless expedition. All game text is in English. Existing browser saves remain compatible.
 
 ## Run locally
 
@@ -18,12 +18,12 @@ Open the local URL printed by the server. For another device on the same network
 1. Choose **Online Co-op** and open **Your Ship & Weapon** to select your loadout.
 2. The commander chooses **Create Room** and sets the mission rules.
 3. Share the eight-character room code or use **Copy Invite**. A localhost invite must be changed to an address the other device can reach.
-4. The second pilot enters the code and chooses **Join Room**.
-5. When both ships are connected, the commander chooses **Launch Together**.
+4. Each guest enters the code and chooses **Join Room**.
+5. When two to four pilots are connected, the commander chooses **Launch Together**.
 
-Both pilots move, shoot, dash, and use EMP independently. Experience, scrap, and score are shared; enemy health scales to the squad. Before launch, the commander chooses campaign/endless, difficulty, shared or individual power-ups, and shared or separate kill displays. Shared modules upgrade both ships; individual modules offer each pilot their own cards and rerolls, and time resumes once both have chosen. The commander buys station supplies, resumes paused runs, and starts rematches. Either pilot can pause. A downed ship returns with at least half hull when the surviving pilot clears a wave. The run ends when both ships are down. Completed runs award progression in each pilot's own browser.
+All pilots move, shoot, dash, and use EMP independently. Experience, scrap, and score are shared; enemy health scales to the squad. Before launch, the commander chooses campaign/endless, difficulty, shared or individual power-ups, and shared or separate kill displays. Shared modules upgrade every ship; individual modules offer each pilot their own cards and rerolls, and time resumes once every pilot has chosen. The commander buys station supplies, resumes paused runs, and starts rematches. Any pilot can pause. A downed ship returns with at least half hull when the surviving pilot clears a wave. The run ends when all ships are down. Completed runs award progression in each pilot's own browser.
 
-Keep both tabs open. Switching focus between visible co-op windows clears held controls without pausing; hiding a game tab pauses the shared run. The commander resumes it. Brief signaling outages reconnect without stopping an established game. A lost gameplay connection stops the run and offers a return to the hangar, within about 32 seconds for an abruptly closed browser. Guests can leave and rejoin the same lobby before launch. There is no host migration or mid-run reconnection.
+Keep every pilot's tab open. Switching focus between visible co-op windows clears held controls without pausing; hiding a game tab pauses the shared run. The commander resumes it. Brief signaling outages reconnect without stopping an established game. A lost gameplay connection stops the run and offers a return to the hangar, within about 32 seconds for an abruptly closed browser. Guests can leave and rejoin the same lobby before launch. There is no host migration or mid-run reconnection. If any pilot disconnects during a run, the squad stops and is prompted to regroup rather than leaving an uncontrolled ship or a blocked upgrade draft. Returning to the hangar together preserves the room and loadouts for a rematch. A fifth player is rejected without disturbing the existing squad.
 
 ## Missions and builds
 
@@ -52,7 +52,7 @@ Graphics, sound, volume, and screen shake are adjustable in Settings. Turn off b
 
 ## Multiplayer implementation
 
-The commander runs one authoritative 60 Hz simulation. The wingmate sends changed movement at up to 20 Hz, immediate one-shot abilities, and a 10 Hz idle keepalive. Snapshots arrive at up to 20 Hz (1 Hz while paused). Reliable binary WebRTC messages use compact entity tuples, integer quantization to 0.01 units, cached metadata, a 32 KB backpressure threshold, and bounded visual prediction for ships, enemies, and projectiles. A reproducible 30-enemy/120-projectile fixture measures approximately 88% less snapshot payload per second than the previous full-state 40 Hz stream; actual traffic varies by scene and excludes transport overhead. Run IDs, input sequence numbers, single-use ability flags, a 400 ms input timeout, and connection heartbeats prevent stale controls and old-run actions.
+The commander runs one authoritative 60 Hz simulation. Each guest sends changed movement at up to 20 Hz, immediate one-shot abilities, and a 10 Hz idle keepalive. Snapshots arrive at up to 20 Hz (1 Hz while paused). Reliable binary WebRTC messages use compact entity tuples, integer quantization to 0.01 units, cached metadata, a 32 KB backpressure threshold, and bounded visual prediction for ships, enemies, and projectiles. A reproducible 30-enemy/120-projectile fixture measures approximately 88% less snapshot payload per second than the previous full-state 40 Hz stream; actual traffic varies by scene and excludes transport overhead. Each connection has its own stable pilot ID, input sequence, heartbeat, encoder, and backpressure handling. The host sends each guest one compact world stream; guests do not connect to one another. A slow guest does not block the other streams. Run IDs, input sequence numbers, single-use ability flags, a 400 ms input timeout, and connection heartbeats prevent stale controls and old-run actions.
 
 Connections use [PeerJS](https://peerjs.com/client/api/peer) for public signaling, with explicit STUN servers and configurable TURN relays. PeerJS 1.5.5's bundled TURN hostnames had no DNS address records during the September 2026 investigation; relying on them allowed local tests to pass while remote players failed. A working TURN provider is necessary for players whose networks cannot connect directly. The game fetches ICE configuration from `/api/ice` before connecting, and shows a setup notice when a relay is unavailable. Room codes are invite secrets, not an authenticated identity system.
 
@@ -69,7 +69,7 @@ npm run test:multiplayer
 npm run test:multiplayer:relay
 ```
 
-The unit tests cover simulation, co-op protocol, signaling recovery, failed handshakes, asynchronous ability serialization, and credential handling. Browser tests build the Vercel export and use two isolated Chromium contexts with real PeerJS signaling and WebRTC. They exercise lobby rejoining, launch, both pilots' movement, dash, pause/resume, signaling interruption, and disconnect handling. `test:multiplayer:relay` starts an authenticated TURN fixture bound only to loopback, forces both browsers through it, and asserts the selected ICE candidates are relays. This verifies the relay transport and credential endpoint without requiring paid provider credentials; it does not verify a production provider's availability.
+The unit tests cover simulation, co-op protocol, signaling recovery, failed handshakes, asynchronous ability serialization, and credential handling. Browser tests build the Vercel export and use two and four isolated Chromium contexts with real PeerJS signaling and WebRTC. They exercise lobby rejoining, launch, every pilot's movement, dash, pause/resume, signaling interruption, and disconnect handling. `test:multiplayer:relay` starts an authenticated TURN fixture bound only to loopback, forces the browsers through it, and asserts the selected ICE candidates are relays. This verifies the relay transport and credential endpoint without requiring paid provider credentials; it does not verify a production provider's availability.
 
 Install the browser once with `npx playwright install chromium`. On Windows, an installed Edge can be used instead: `$env:E2E_BROWSER_CHANNEL = 'msedge'`. Browser tests require internet access to PeerJS signaling. Full-repository `npm run lint` includes existing issues in the supplied UI catalog; `lint:game` checks the game and multiplayer source.
 

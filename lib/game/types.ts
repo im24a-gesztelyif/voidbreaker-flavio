@@ -3,7 +3,7 @@ export type ShipId = 'kestrel' | 'wraith' | 'bastion';
 export type WeaponId = 'pulse' | 'scatter' | 'rail';
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'veteran' | 'ace';
 export type GameMode = 'campaign' | 'endless';
-export type PilotId = 0 | 1;
+export type PilotId = 0 | 1 | 2 | 3;
 export interface RoomOptions {
   mode: GameMode;
   difficulty: Difficulty;
@@ -208,7 +208,19 @@ export interface RunStats {
   bosses: number;
   maxCombo: number;
 }
+export interface PilotState {
+  slot: PilotId;
+  player: Player;
+  ship: ShipId;
+  weapon: WeaponId;
+  autoFire: boolean;
+  upgrades: Partial<Record<UpgradeId,number>>;
+  choices: UpgradeDef[];
+  rerolls: number;
+}
 export interface GameState {
+  localPilot?: PilotId;
+  extraPilots: PilotState[];
   mode: GameMode;
   loop: number;
   sharedUpgrades: boolean;

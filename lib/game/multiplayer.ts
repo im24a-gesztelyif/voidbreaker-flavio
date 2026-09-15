@@ -1,8 +1,9 @@
+import { squad } from './squad';
 import type { Peer, DataConnection } from 'peerjs';
 import { SnapshotEncoder, SnapshotDecoder } from './codec';
 import { cleanOptions, defaultOptions } from './rules';
 import { loadSave } from './simulation';
-import type { GameInput, GameState, SaveData, RoomOptions, UpgradeId } from './types';
+import type { GameInput, GameState, SaveData, RoomOptions, UpgradeId, PilotId } from './types';
 import {
   STUN_SERVERS,
   normalizeIceServers,
@@ -47,27 +48,21 @@ export function cleanInput(value: unknown): GameInput | null {
     pulse: v.pulse === true,
   };
 }
-export function guestView(s: GameState): GameState {
-  if (!s.partner) return s;
-  return {
-    ...s,
-    player: s.partner,
-    upgrades: s.sharedUpgrades ? s.upgrades : s.partnerUpgrades,
-    partnerUpgrades: s.upgrades,
-    choices: s.sharedUpgrades ? [] : s.partnerChoices,
-    partnerChoices: s.choices,
-    rerolls: s.sharedUpgrades ? 0 : s.partnerRerolls,
-    partnerRerolls: s.rerolls,
-    ship: s.partnerShip!,
-    weapon: s.partnerWeapon!,
-    autoFire: !!s.partnerAutoFire,
-    partner: s.player,
-    partnerShip: s.ship,
-    partnerWeapon: s.weapon,
-    partnerAutoFire: s.autoFire,
-  };
+export function guestView(s: GameState, slot: PilotId = 1): GameState {
+  const crew=squad(s), local=crew.find(p=>p.slot===slot), host=crew.find(p=>p.slot===0);
+  if (!local || !host || slot===0) return s;
+  return {...s,localPilot:slot,player:local.player,ship:local.ship,weapon:local.weapon,autoFire:local.autoFire,
+    upgrades:s.sharedUpgrades?s.upgrades:local.upgrades,choices:s.sharedUpgrades?[]:local.choices,rerolls:s.sharedUpgrades?0:local.rerolls,
+    partner:host.player,partnerShip:host.ship,partnerWeapon:host.weapon,partnerAutoFire:host.autoFire,
+    partnerUpgrades:host.upgrades,partnerChoices:host.choices,partnerRerolls:host.rerolls,
+    extraPilots:crew.filter(p=>p.slot!==slot&&p.slot!==0).map(p=>({...p}))};
 }
-const PREFIX = 'voidbreaker-v3-';
+interface Link {
+  slot: PilotId; save: SaveData | null; input: GameInput; received: number; lastInput: number; lastSeen: number;
+  latency: number; encoder: SnapshotEncoder; timer?: ReturnType<typeof setInterval>; timeout?: ReturnType<typeof setTimeout>;
+}
+export interface RoomMember {slot:PilotId; save:SaveData}
+const PREFIX = 'voidbreaker-v5-';
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const normalizeCode = (value: string) =>
   value
@@ -83,6 +78,11 @@ export class Multiplayer {
   message = '';
   remoteSave: SaveData | null = null;
   partySize = 1;
+  slot: PilotId = 1;
+  members: RoomMember[] = [];
+  private links = new Map<DataConnection,Link>();
+  get canLaunch() {return this.status==='connected' && this.links.size>0 && [...this.links.values()].every(l=>!!l.save);}
+  get remotes() {return this.members.filter(m=>m.slot!==0);}
   run = '';
   latency = 0;
   relayAvailable = false;
@@ -110,7 +110,8 @@ export class Multiplayer {
   private snapshotAt = 0;
   constructor(
     private callbacks: {
-      choose?: (id: UpgradeId | null, draft: number) => void;
+      hangar?: () => void;
+      choose?: (id: UpgradeId | null, draft: number, pilot: PilotId) => void;
       change: () => void;
       snapshot: (state: GameState, newRun: boolean) => void;
       pause: () => void;
@@ -193,14 +194,14 @@ export class Multiplayer {
       // Never replace that channel or reset an already connected room.
       if (this.connection) return;
       if (this.role === 'host') {
-        this.update('waiting');
+        this.syncRoster();
       } else {
         try {
           this.attach(
             peer.connect(PREFIX + this.code, {
               reliable: true,
               serialization: 'binary',
-              metadata: { protocol: 3 },
+              metadata: { protocol: 5 },
             }),
           );
         } catch {
@@ -219,7 +220,7 @@ export class Multiplayer {
         this.role !== 'host' ||
         this.connections.size >= MAX_PARTY_PLAYERS - 1 ||
         this.run ||
-        c.metadata?.protocol !== 3
+        c.metadata?.protocol !== 5
       ) {
         const cleanup = setTimeout(() => c.close(), 20000);
         c.on('error', () => {
@@ -247,7 +248,7 @@ export class Multiplayer {
       }
       // PeerJS reports negotiation errors on the peer as well as the channel.
       if (e.type === 'webrtc' && this.connection) {
-        if (!this.connection.open) this.connectionFailed(this.connection);
+        // Individual channel errors are handled by their own connection listeners.
         return;
       }
       this.fail(
@@ -276,71 +277,66 @@ export class Multiplayer {
       }
     }, this.reconnectDelay);
   }
+  private sendTo(c: DataConnection, data: unknown) {
+    if (!c.open) return;
+    try { const result=c.send(data); if(result) void result.catch(()=>this.connectionFailed(c)); }
+    catch {this.connectionFailed(c);}
+  }
+  private syncRoster() {
+    if (this.role!=='host' || this.run) return;
+    const ready=[...this.links.values()].filter(l=>l.save);
+    const pending=[...this.links.values()].filter(l=>!l.save);
+    [...ready,...pending].forEach((l,i)=>{l.slot=(i+1) as PilotId;});
+    this.members=[{slot:0,save:this.callbacks.save()},...ready.map(l=>({slot:l.slot,save:l.save!}))];
+    this.partySize=this.members.length;
+    this.remoteSave=ready[0]?.save || null;
+    for(const [c,l] of this.links) if(l.save) this.sendTo(c,{type:'roster',slot:l.slot,members:this.members,options:this.options});
+    this.update(ready.length?'connected':'waiting');
+  }
   private attach(c: DataConnection) {
-    this.connections.add(c);
-    if (!this.connection) this.connection = c;
-    this.partySize = this.connections.size + 1;
-    this.handshakeTimeout = setTimeout(() => this.connectionFailed(c), 20000);
-    c.on('open', () => {
-      if (!this.connections.has(c) || this.disposed) return;
-      this.lastSeen = Date.now();
-      this.send({ type: 'hello', protocol: 3, save: this.callbacks.save(), ...(this.role === 'host' ? {options: this.options} : {}) });
-      if (!this.connections.has(c)) return;
-      this.timer = setInterval(() => {
-        if (Date.now() - this.lastSeen > 30000) {
-          this.connectionFailed(c);
-          return;
-        }
-        this.send({ type: 'ping', time: Date.now() });
-      }, 2000);
+    const link:Link={slot:([...this.links.keys()].length+1) as PilotId,save:null,input:neutralInput(),received:-1,lastInput:0,lastSeen:Date.now(),latency:0,encoder:new SnapshotEncoder()};
+    this.links.set(c,link);this.connections.add(c);
+    if(!this.connection)this.connection=c;
+    link.timeout=setTimeout(()=>this.connectionFailed(c),20000);
+    c.on('open',()=>{
+      if(!this.links.has(c)||this.disposed)return;
+      link.lastSeen=Date.now();
+      this.sendTo(c,{type:'hello',protocol:5,save:this.callbacks.save(),...(this.role==='host'?{options:this.options,slot:link.slot}:{})});
+      if(!this.links.has(c))return;
+      link.timer=setInterval(()=>{
+        if(Date.now()-link.lastSeen>30000){this.connectionFailed(c);return;}
+        this.sendTo(c,{type:'ping',time:Date.now()});
+      },2000);
     });
-    c.on('data', (data) => {
-      if (this.connections.has(c)) this.receive(data);
-    });
-    c.on('close', () => this.connectionFailed(c));
-    c.on('error', () => this.connectionFailed(c));
+    c.on('data',data=>{if(this.links.has(c))this.receive(data,c);});
+    c.on('close',()=>this.connectionFailed(c));c.on('error',()=>this.connectionFailed(c));
+    this.callbacks.change();
   }
   private connectionFailed(c: DataConnection) {
-    if (this.disposed || !this.connections.has(c) || this.status === 'error')
-      return;
-    const wasPrimary = this.connection === c;
-    this.connections.delete(c);
-    if (wasPrimary) this.connection = this.connections.values().next().value;
-    this.partySize = this.connections.size + 1;
-    if (this.role === 'host' && this.run && !wasPrimary) return;
-    if (this.role === 'host' && !this.run) {
-      // A cancelled/failed join must not reserve the only wingmate slot forever.
-      clearInterval(this.timer);
-      clearTimeout(this.handshakeTimeout);
-      c.close();
-      this.remoteSave = null;
-      this.update(this.connections.size ? 'connected' : 'waiting', this.connections.size
-        ? ''
-        : 'Your party member disconnected. They can join again using this code.');
-    } else {
-      this.fail(
-        !this.run && !this.relayAvailable
-          ? 'Could not reach this room. This deployment needs a TURN relay for connections between restricted networks. Ask the site owner to complete the multiplayer setup in the README.'
-          : 'The connection was interrupted. Return to the hangar and reconnect.',
-      );
-    }
+    const link=this.links.get(c);
+    if(this.disposed||!link||this.status==='error')return;
+    clearInterval(link.timer);clearTimeout(link.timeout);
+    this.links.delete(c);this.connections.delete(c);
+    if(this.connection===c)this.connection=this.connections.values().next().value;
+    c.close();
+    if(this.role==='host'&&!this.run){this.syncRoster();return;}
+    const message='A pilot disconnected. Regroup in the hangar to start a new squad run.';
+    if(this.role==='host')this.send({type:'reject',message});
+    this.fail(message);
   }
   private releaseConnection() {
-    clearInterval(this.timer);
-    clearTimeout(this.handshakeTimeout);
-    const connections = this.connections.size
-      ? [...this.connections]
-      : this.connection
-        ? [this.connection]
-        : [];
-    this.connection = undefined;
-    this.connections.clear();
-    this.partySize = 1;
-    connections.forEach((connection) => connection.close());
+    clearInterval(this.timer);clearTimeout(this.handshakeTimeout);
+    for(const link of this.links.values()){clearInterval(link.timer);clearTimeout(link.timeout);}
+    this.links.clear();
+    const all=this.connections.size?[...this.connections]:this.connection?[this.connection]:[];
+    this.connection=undefined;this.connections.clear();this.members=[];this.partySize=1;
+    all.forEach(c=>c.close());
   }
-  private receive(data: unknown) {
+  private receive(data: unknown, source?: DataConnection) {
     if (!data || typeof data !== 'object' || this.disposed) return;
     const m = data as {
+      slot?: PilotId;
+      members?: RoomMember[];
       type?: string;
       message?: unknown;
       time?: unknown;
@@ -355,32 +351,39 @@ export class Multiplayer {
       id?: UpgradeId;
       draft?: number;
     };
+    const link=source?this.links.get(source):undefined;
+    if(link)link.lastSeen=Date.now();
     this.lastSeen = Date.now();
     if (m.type === 'reject') {
       this.fail(String(m.message));
       return;
     }
     if (m.type === 'ping') {
-      this.send({ type: 'pong', time: m.time });
+      if(source)this.sendTo(source,{type:'pong',time:m.time});else this.send({type:'pong',time:m.time});
       return;
     }
     if (m.type === 'pong' && typeof m.time === 'number') {
       this.latency = Math.max(0, Date.now() - m.time);
+      if(link)link.latency=this.latency;
       return;
     }
-    if (m.type === 'hangar') {
-      this.clearRun();
-      this.callbacks.pause();
-      if (this.role === 'host') this.send({ type: 'hangar' });
+    if (m.type === 'hangar' && this.status==='connected' && m.run===this.run) {
+      if(this.role==='host')this.returnToHangar();
+      else {this.clearRun();this.callbacks.hangar?.();}
       return;
     }
-    if (m.type === 'hello' && m.protocol === 3) {
-      if (this.run) return;
-      clearTimeout(this.handshakeTimeout);
-      this.remoteSave = loadSave(JSON.stringify(m.save));
-      if (this.role === 'guest') this.options = cleanOptions(m.options);
-      this.update('connected');
+    if (m.type==='hello' && m.protocol===5) {
+      if(this.run)return;
+      if(link){clearTimeout(link.timeout);link.save=loadSave(JSON.stringify(m.save));}
+      this.remoteSave=loadSave(JSON.stringify(m.save));
+      if(this.role==='host'&&link)this.syncRoster();
+      else {if(this.role==='guest'){this.options=cleanOptions(m.options);if(m.slot)this.slot=m.slot;}this.update('connected');}
       return;
+    }
+    if(m.type==='roster' && this.role==='guest' && !this.run && Array.isArray(m.members) && m.members.length>=2 && m.members.length<=4 && [1,2,3].includes(m.slot!)) {
+      if(!m.members.every(x=>[0,1,2,3].includes(x.slot))||new Set(m.members.map(x=>x.slot)).size!==m.members.length)return;
+      this.slot=m.slot!;this.members=m.members.map(x=>({slot:x.slot,save:loadSave(JSON.stringify(x.save))}));
+      this.partySize=this.members.length;this.options=cleanOptions(m.options);this.update('connected');return;
     }
     if (m.type === 'options' && this.role === 'guest' && !this.run) {
       this.options = cleanOptions(m.options); this.callbacks.change(); return;
@@ -392,20 +395,21 @@ export class Multiplayer {
         m.type === 'input' &&
         typeof m.seq === 'number' &&
         Number.isSafeInteger(m.seq) &&
-        m.seq > this.received
+        m.seq > (link?.received ?? this.received)
       ) {
         const next = cleanInput(m.input);
         if (!next) return;
-        next.dash ||= this.input.dash;
-        next.pulse ||= this.input.pulse;
+        next.dash ||= (link?.input ?? this.input).dash;
+        next.pulse ||= (link?.input ?? this.input).pulse;
+        if(link){link.received=m.seq;link.input=next;link.lastInput=Date.now();if(typeof m.autoFire==='boolean'&&link.save)link.save.settings.autoFire=m.autoFire;}
         this.received = m.seq;
         this.input = next;
         this.lastInput = Date.now();
-        if (typeof m.autoFire === 'boolean' && this.remoteSave)
+        if (!link && typeof m.autoFire === 'boolean' && this.remoteSave)
           this.remoteSave.settings.autoFire = m.autoFire;
       }
       if ((m.type === 'choose' || m.type === 'reroll') && !this.options.sharedUpgrades && Number.isSafeInteger(m.draft)) {
-        this.callbacks.choose?.(m.type === 'reroll' ? null : m.id!, m.draft!);
+        this.callbacks.choose?.(m.type === 'reroll' ? null : m.id!, m.draft!, link?.slot ?? 1);
       }
       if (m.type === 'pause') this.callbacks.pause();
     } else if (m.type === 'state' && typeof m.run === 'string' && m.run.length === 32) {
@@ -414,28 +418,17 @@ export class Multiplayer {
       const state = this.decoder.decode(m.frame);
       if (!state) return;
       this.run = m.run;
-      this.callbacks.snapshot(guestView(state), newRun);
+      this.callbacks.snapshot(guestView(state,this.slot), newRun);
     }
   }
   send(data: unknown) {
-    const connections = this.connections.size
-      ? this.connections
-      : this.connection
-        ? new Set([this.connection])
-        : new Set<DataConnection>();
-    for (const connection of connections) {
-      if (!connection.open) continue;
-      try {
-        const sent = connection.send(data);
-        if (sent) void sent.catch(() => this.connectionFailed(connection));
-      } catch {
-        this.connectionFailed(connection);
-      }
-    }
+    const all=this.connections.size?[...this.connections]:this.connection?[this.connection]:[];
+    for(const c of all)this.sendTo(c,data);
   }
   updateLoadout() {
-    if (!this.run)
-      this.send({ type: 'hello', protocol: 3, save: this.callbacks.save(), ...(this.role === 'host' ? {options: this.options} : {}) });
+    if(this.run)return;
+    if(this.role==='host'&&this.links.size)this.syncRoster();
+    else this.send({type:'hello',protocol:5,save:this.callbacks.save(),...(this.role==='host'?{options:this.options}:{})});
   }
   configure(options: Partial<RoomOptions>) {
     if (this.role !== 'host' || this.run) return;
@@ -449,6 +442,7 @@ export class Multiplayer {
   begin() {
     this.clearRun();
     this.encoder.reset();
+    for(const link of this.links.values()){link.encoder.reset();link.input=neutralInput();link.received=-1;link.lastInput=0;}
     this.snapshotAt = 0;
     this.run = Array.from(crypto.getRandomValues(new Uint8Array(16)), (n) =>
       n.toString(16).padStart(2, '0'),
@@ -467,21 +461,22 @@ export class Multiplayer {
     this.lastInput = 0;
   }
   returnToHangar() {
-    if (this.status === 'connected') this.send({ type: 'hangar' });
-    this.clearRun();
+    if (this.status !== 'connected')return;
+    this.send({type:'hangar',run:this.run});
+    if(this.role==='host'){this.clearRun();this.callbacks.hangar?.();this.syncRoster();}
   }
   broadcast(state: GameState, force = false) {
     if (this.role !== 'host' || !this.run || this.status !== 'connected')
       return;
     const now = performance.now();
-    if (
-      !force &&
-      (now - this.snapshotAt < (state.phase === 'playing' ? 50 : 1000) ||
-        (this.connection?.dataChannel?.bufferedAmount || 0) > 32000)
-    )
-      return;
-    this.snapshotAt = now;
-    this.send({ type: 'state', run: this.run, frame: this.encoder.encode(state, force) });
+    if (!force && now-this.snapshotAt < (state.phase==='playing'?50:1000))return;
+    this.snapshotAt=now;
+    if(!this.links.size){this.send({type:'state',run:this.run,frame:this.encoder.encode(state,force)});return;}
+    for(const [c,link] of this.links){
+      if(!link.save||!c.open)continue;
+      if(!force&&(c.dataChannel?.bufferedAmount||0)>32000)continue;
+      this.sendTo(c,{type:'state',run:this.run,frame:link.encoder.encode(state,force)});
+    }
   }
   submit(input: GameInput, autoFire: boolean) {
     this.pending = {
@@ -503,7 +498,13 @@ export class Multiplayer {
     this.pending.dash = false;
     this.pending.pulse = false;
   }
-  consume(): GameInput {
+  consume(slot: PilotId = 1): GameInput {
+    const link=[...this.links.values()].find(l=>l.slot===slot);
+    if(link){
+      if(Date.now()-link.lastInput>400)return neutralInput();
+      const result={...link.input};link.input.dash=false;link.input.pulse=false;return result;
+    }
+    if(slot!==1)return neutralInput();
     if (Date.now() - this.lastInput > 400) return neutralInput();
     const result = { ...this.input };
     this.input.dash = false;

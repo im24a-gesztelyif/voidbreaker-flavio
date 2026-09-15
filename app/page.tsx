@@ -41,6 +41,7 @@ import {
 } from '@/lib/game/content';
 import { ShipPreview } from '@/components/ship-preview';
 import { CoopLobby } from '@/components/coop-lobby';
+import { squad, pilotState } from '@/lib/game/squad';
 import { Multiplayer } from '@/lib/game/multiplayer';
 import { Simulation, loadSave } from '@/lib/game/simulation';
 import { GameAudio } from '@/lib/game/audio';
@@ -117,9 +118,10 @@ export default function Home() {
     leaveRoom();
     const connection = new Multiplayer({
       change: refresh,
-      choose: (id, draft) => {
-        if (id === null) sim.current.reroll(1, draft);
-        else sim.current.chooseUpgrade(id, 1, draft);
+      hangar: () => {sim.current=new Simulation(saveRef.current.ship,saveRef.current.weapon,saveRef.current);setPanel('multiplayer');keys.current.clear();refresh();},
+      choose: (id, draft, pilot) => {
+        if (id === null) sim.current.reroll(pilot, draft);
+        else sim.current.chooseUpgrade(id, pilot, draft);
         room.current?.broadcast(sim.current.state, true);
         refresh();
       },
@@ -169,6 +171,7 @@ export default function Home() {
     refresh();
   };
   const start = () => {
+    if (room.current && (room.current.role==='guest' || !room.current.canLaunch)) return;
     sim.current = new Simulation(
       saveRef.current.ship,
       saveRef.current.weapon,
@@ -179,8 +182,7 @@ export default function Home() {
     );
     if (room.current?.role === 'guest') return;
     if (room.current?.status === 'connected' && room.current.remoteSave) {
-      const remote = room.current.remoteSave;
-      sim.current.addPartner(remote.ship, remote.weapon, remote);
+      for (const {slot,save:remote} of room.current.remotes) sim.current.addPilot(slot,remote.ship,remote.weapon,remote);
       room.current.begin();
     }
     sim.current.start();
@@ -195,7 +197,7 @@ export default function Home() {
     refresh();
   };
   const hangar = () => {
-    room.current?.returnToHangar();
+    if(room.current?.status==='error')leaveRoom();else room.current?.returnToHangar();
     sim.current = new Simulation(
       saveRef.current.ship,
       saveRef.current.weapon,
@@ -378,9 +380,10 @@ export default function Home() {
         accumulator = 0;
       } else {
         while (accumulator >= 1 / 60) {
-          if (room.current?.remoteSave)
-            s.partnerAutoFire = room.current.remoteSave.settings.autoFire;
-          g.step(1 / 60, input, room.current?.consume());
+          for(const member of room.current?.remotes || []) {
+            const pilot=pilotState(s,member.slot);if(pilot)pilot.autoFire=member.save.settings.autoFire;
+          }
+          g.step(1 / 60, input, room.current?.consume(1), {2:room.current?.consume(2),3:room.current?.consume(3)});
           input.dash = false;
           input.pulse = false;
           actions.current = { dash: false, pulse: false };
@@ -455,6 +458,8 @@ export default function Home() {
                 sharedUpgrades: sim.current.state.sharedUpgrades,
                 sharedKills: sim.current.state.sharedKills,
                 hull: sim.current.state.player.hp,
+                pilots: squad(sim.current.state).map(m=>({slot:m.slot,ship:m.ship,x:m.player.x,y:m.player.y,hp:m.player.hp,kills:m.player.kills,upgrades:m.upgrades,choices:m.choices.map(c=>c.id)})),
+                localPilot: sim.current.state.localPilot ?? 0,
                 score: sim.current.score(),
                 time: sim.current.state.totalTime,
                 player: { x: sim.current.state.player.x, y: sim.current.state.player.y, dashCooldown: sim.current.state.player.dashCooldown },
@@ -601,7 +606,7 @@ export default function Home() {
           </section>
   );
   return (
-    <main className={`game-shell ${menu ? '' : 'in-game'}`}>
+    <main className={`game-shell ${menu ? '' : 'in-game'} ${s.extraPilots.length ? 'large-party' : ''}`}>
       <div ref={host} className="space-view" />
       <div className="vignette" />
       <header className="topbar">
@@ -710,7 +715,7 @@ export default function Home() {
               disabled={!ready}
               onClick={() => setPanel('multiplayer')}
             >
-              <Users size={18} /> ONLINE CO-OP <span>02 PILOTS</span>
+              <Users size={18} /> ONLINE CO-OP <span>UP TO 4 PILOTS</span>
             </Button>
             <div className="launch-note">
               {mode === 'endless' ? 'ENDLESS SECTORS' : '3 SECTORS'} <span>·</span> ONE LIFE <span>·</span> YOUR BUILD
@@ -868,6 +873,7 @@ export default function Home() {
                     fill="#ff946e"
                   />
                 ))}
+                {s.extraPilots.map(m=><circle key={m.slot} cx={m.player.x} cy={m.player.y} r="2" fill={m.slot===2?'#ffc178':'#ff91cf'}/>)}
                 {s.partner && (
                   <circle
                     cx={s.partner.x}
@@ -935,7 +941,7 @@ export default function Home() {
               <span /> SYSTEM UPGRADE / LEVEL {p.level}
             </div>
             <h2>BUILT TO GO FURTHER.</h2>
-            <p>{s.choices.length ? (s.sharedUpgrades ? 'Choose a module for the squad.' : 'Your ship. Your build. Choose your own module.') : 'Module installed. Waiting for your wingmate to choose.'}</p>
+            <p>{s.choices.length ? (s.sharedUpgrades ? 'Choose a module for the squad.' : 'Your ship. Your build. Choose your own module.') : 'Module installed. Waiting for the other pilots to choose.'}</p>
             <div className="upgrade-grid">
               {s.choices.map((u, i) => (
                 <button
@@ -1037,10 +1043,10 @@ export default function Home() {
                     s.stats.scrap < item.cost ||
                     (item.id === 'repair' &&
                       p.hp >= p.maxHp &&
-                      (!s.partner || s.partner.hp >= s.partner.maxHp)) ||
+                      squad(s).slice(1).every(m=>m.player.hp>=m.player.maxHp)) ||
                     (item.id === 'charge' &&
                       p.pulse >= 100 &&
-                      (!s.partner || s.partner.pulse >= 100))
+                      squad(s).slice(1).every(m=>m.player.pulse>=100))
                   }
                   onClick={() => {
                     sim.current.purchase(item.id);
@@ -1392,27 +1398,18 @@ export default function Home() {
         />
       )}
       {!menu && s.partner && (
-        <div className="wingmate-hud">
-          <Users size={15} />
-          <div>
-            <span>
-              {isGuest ? 'COMMANDER' : 'WINGMATE'} ·{' '}
-              {s.partnerShip?.toUpperCase()}
-            </span>
-            <strong>
-              {s.partner.hp <= 0
-                ? 'DOWN · RETURNS NEXT WAVE'
-                : `${Math.ceil(s.partner.hp)} HULL`}
-            </strong>
-          </div>
-          {!s.sharedKills && <b>{s.partner.kills} KILLS</b>}
-          <small>{room.current?.latency || 0} ms</small>
+        <div className="wingmate-stack">
+          {squad(s).slice(1).map(member=><div className="wingmate-hud" key={member.slot} data-pilot={member.slot}>
+            <Users size={15}/><div><span>{member.slot===0?'COMMANDER':`PILOT ${member.slot+1}`} - {member.ship.toUpperCase()}</span>
+            <strong>{member.player.hp<=0?'DOWN - RETURNS NEXT WAVE':`${Math.ceil(member.player.hp)} HULL`}</strong></div>
+            {!s.sharedKills&&<b>{member.player.kills} KILLS</b>}
+          </div>)}
         </div>
       )}
       {!menu && p.hp <= 0 && s.phase === 'playing' && (
         <div className="downed-notice">
           SHIP DOWN
-          <span>Your wingmate can bring you back by clearing this wave.</span>
+          <span>Your squad can bring you back by clearing this wave.</span>
         </div>
       )}
       {isGuest &&
@@ -1436,7 +1433,7 @@ export default function Home() {
               </h2>
               <p>
                 {s.phase === 'upgrade'
-                  ? 'Your commander is choosing an upgrade for both ships.'
+                  ? 'Your commander is choosing an upgrade for every ship.'
                   : 'Your commander is preparing the next jump. Repairs and supplies are shared.'}
               </p>
               <span className="waiting-signal">

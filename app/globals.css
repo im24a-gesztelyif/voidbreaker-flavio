@@ -2027,3 +2027,19 @@ body {
 .flight-setup .ship-card strong { font-size:16px; }
 @media (min-width:601px) and (max-width:900px) { .ship-preview { flex-basis:58px; width:58px; } }
 @media (max-width:600px) { .flight-setup .ship-card { min-height:84px; } .flight-setup .ship-card > div { display:block; text-align:left; } }
+.wingmate-stack { position:absolute; z-index:5; top:calc(230px + env(safe-area-inset-top)); left:4.5%; display:grid; gap:5px; max-width:245px; pointer-events:none; }
+.wingmate-stack .wingmate-hud { position:static; transform:none; gap:8px; padding:7px 9px; min-width:0; }
+.wingmate-hud[data-pilot="0"] { color:#b1ff79; }
+.wingmate-hud[data-pilot="2"] { color:#ffc178; }
+.wingmate-hud[data-pilot="3"] { color:#ff91cf; }
+@media(max-width:600px) {
+ .wingmate-stack { top:calc(203px + env(safe-area-inset-top));left:16px;max-width:215px; }
+ .large-party .boss-hud { top:calc(375px + env(safe-area-inset-top)); }
+}
+@media(max-height:520px) and (orientation:landscape) {
+ .wingmate-stack { top:64px;left:29%;right:24%;max-width:none;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px; }
+ .wingmate-stack .wingmate-hud { padding:3px;display:block; }
+ .wingmate-stack .wingmate-hud > svg {display:none;}
+ .wingmate-stack .wingmate-hud span,.wingmate-stack .wingmate-hud strong {font-size:8px;overflow-wrap:anywhere;}
+ .large-party .boss-hud {top:140px;}
+}

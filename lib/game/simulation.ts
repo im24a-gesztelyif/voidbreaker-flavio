@@ -1,3 +1,4 @@
+import { squad, pilotState } from './squad';
 import {
   ACHIEVEMENTS,
   ENEMY_DATA,
@@ -102,7 +103,7 @@ export class Simulation {
     const hp = spec.hp + save.meta.hull * 8;
     this.state = {
       ...cleanOptions({ difficulty, ...options }),
-      loop: 0, partnerUpgrades: {}, partnerChoices: [], partnerRerolls: 2, draftId: 0,
+      loop: 0, extraPilots: [], partnerUpgrades: {}, partnerChoices: [], partnerRerolls: 2, draftId: 0,
       phase: 'menu',
       previousPhase: 'playing',
       ship,
@@ -184,7 +185,7 @@ export class Simulation {
     return this.randomState / 4294967296;
   }
   private ranks(pilot: PilotId = this.activePilot) {
-    return pilot === 1 && !this.state.sharedUpgrades ? this.state.partnerUpgrades : this.state.upgrades;
+    return this.state.sharedUpgrades ? this.state.upgrades : (pilotState(this.state,pilot)?.upgrades || {});
   }
   private rank(id: UpgradeId, pilot: PilotId = this.activePilot) { return this.ranks(pilot)[id] || 0; }
   private get rules() { return DIFFICULTIES[this.state.difficulty]; }
@@ -248,7 +249,7 @@ export class Simulation {
     }
   }
 
-  step(dt: number, input: GameInput, partnerInput?: GameInput) {
+  step(dt: number, input: GameInput, partnerInput?: GameInput, extraInputs: Partial<Record<PilotId,GameInput>> = {}) {
     const s = this.state,
       p = s.player;
     if (s.phase !== 'playing') return;
@@ -273,6 +274,11 @@ export class Simulation {
         dt,
       );
     if (s.phase !== 'playing') return;
+    for (const member of s.extraPilots) {
+      const controls = extraInputs[member.slot] || {x:0,y:0,aimX:member.player.x,aimY:member.player.y-20,firing:false,dash:false,pulse:false};
+      this.updatePilot(member.player,member.ship,member.weapon,member.autoFire,controls,dt);
+      if (s.phase !== 'playing') return;
+    }
     this.spawning(dt);
     for (const e of s.enemies) if (e.hp > 0) this.updateEnemy(e, dt);
     for (const b of s.bullets) {
@@ -288,7 +294,7 @@ export class Simulation {
       const collector = this.closestPilot(item);
       const d = distance(item, collector),
         magnet =
-          7 * (1 + this.rank('magnet', collector === s.partner ? 1 : 0) * 0.6 + this.rank('speed', collector === s.partner ? 1 : 0) * 0.15);
+          7 * (1 + this.rank('magnet', this.pilotId(collector)) * 0.6 + this.rank('speed', this.pilotId(collector)) * 0.15);
       if (d < magnet || item.age > 20 || s.intermission > 0) {
         const a = angleTo(item, collector),
           v = Math.min(d, (13 + 180 / (d + 2)) * dt);
@@ -312,11 +318,7 @@ export class Simulation {
       this.fx('explosion', p.x, p.y, '#ff945e', 8, 2);
     }
     if (s.phase === 'playing' && p.xp >= p.nextXp) this.levelUp();
-    if (s.partner) {
-      s.partner.xp = p.xp;
-      s.partner.level = p.level;
-      s.partner.nextXp = p.nextXp;
-    }
+    for (const other of this.pilots().slice(1)) { other.xp=p.xp; other.level=p.level; other.nextXp=p.nextXp; }
   }
 
   addPartner(ship: ShipId, weapon: WeaponId, save = freshSave()) {
@@ -330,11 +332,16 @@ export class Simulation {
     this.state.partnerAutoFire = save.settings.autoFire;
     this.state.partnerRerolls = 2 + save.meta.fortune;
   }
-  private pilots() {
-    return this.state.partner
-      ? [this.state.player, this.state.partner]
-      : [this.state.player];
+  addPilot(slot: PilotId, ship: ShipId, weapon: WeaponId, save = freshSave()) {
+    if (slot===1) {this.addPartner(ship,weapon,save);return;}
+    if (slot<2 || slot>3 || this.state.phase!=='menu' || pilotState(this.state,slot)) return;
+    const other=new Simulation(ship,weapon,save,this.state.seed);
+    Object.assign(other.state.player,{x:slot===2?-5:5,y:8});
+    this.state.extraPilots.push({slot,player:other.state.player,ship,weapon,autoFire:save.settings.autoFire,upgrades:{},choices:[],rerolls:2+save.meta.fortune});
   }
+  private pilots() {return squad(this.state).map(m=>m.player);}
+  private pilotId(p: Player): PilotId {return squad(this.state).find(m=>m.player===p)!.slot;}
+  private pendingDrafts() {return squad(this.state).some(m=>m.choices.length>0);}
   private closestPilot(origin: Vec) {
     return (
       this.pilots()
@@ -360,7 +367,7 @@ export class Simulation {
     input: GameInput,
     dt: number,
   ) {
-    this.activePilot = p === this.state.partner ? 1 : 0;
+    this.activePilot = this.pilotId(p);
     if (p.hp <= 0) {
       p.vx = 0;
       p.vy = 0;
@@ -650,7 +657,7 @@ export class Simulation {
       kind === 'boss'
         ? (2100 + 1900 * depth + 225 * depth * depth) * this.rules.health
         : data.hp * scale * (elite ? 2.5 : 1);
-    const hp = baseHp * (s.partner ? 1.65 : 1);
+    const hp = baseHp * (1 + .65 * (this.pilots().length - 1));
     const e: Enemy = {
       id: this.id++,
       ...pos,
@@ -1100,7 +1107,7 @@ export class Simulation {
     if (e.deathProcessed) return;
     e.deathProcessed = true;
     const s = this.state,
-      p = this.activePilot === 1 && s.partner ? s.partner : s.player;
+      p = pilotState(s,this.activePilot)?.player || s.player;
     s.stats.kills++;
     p.kills++;
     s.combo++;
@@ -1111,7 +1118,7 @@ export class Simulation {
       p.pulse = Math.min(
         100,
         p.pulse +
-          (e.kind === 'swarm' ? 1 : 2) * (1 + this.rank('pulse', p === s.partner ? 1 : 0) * 0.25),
+          (e.kind === 'swarm' ? 1 : 2) * (1 + this.rank('pulse', this.pilotId(p)) * 0.25),
       );
     this.fx('explosion', e.x, e.y, ENEMY_DATA[e.kind].color, e.radius * 2, 0.7);
     this.emit('explosion', e.kind === 'boss' ? 0.4 : 0.9 + this.random() * 0.3);
@@ -1196,7 +1203,7 @@ export class Simulation {
     collector: Player = this.state.player,
   ) {
     const s = this.state;
-    if (kind === 'xp') s.player.xp += value * (1 + this.rank('magnet', collector === s.partner ? 1 : 0) * 0.15);
+    if (kind === 'xp') s.player.xp += value * (1 + this.rank('magnet', this.pilotId(collector)) * 0.15);
     else if (kind === 'scrap') {
       s.stats.scrap += value;
       s.stats.totalScrap += value;
@@ -1214,7 +1221,7 @@ export class Simulation {
       const index = Math.floor(this.random() * pool.length);
       result.push(pool.splice(index, 1)[0]);
     }
-    if (pilot === 1) this.state.partnerChoices = result; else this.state.choices = result;
+    const member=pilotState(this.state,pilot); if(member) member.choices=result;
   }
   private levelUp() {
     const s = this.state;
@@ -1229,20 +1236,20 @@ export class Simulation {
   private openDraft() {
     const s = this.state;
     s.draftId++;
-    this.draft(0);
-    s.partnerChoices = [];
-    if (s.partner && !s.sharedUpgrades) this.draft(1);
-    for (const [i,p] of this.pilots().entries()) {
-      if (!(i && !s.sharedUpgrades ? s.partnerChoices : s.choices).length && p.hp > 0) p.hp = p.maxHp;
+    for (const member of squad(s)) {
+      member.choices=[];
+      if (!s.sharedUpgrades || member.slot===0) this.draft(member.slot);
     }
-    if (!s.choices.length && !s.partnerChoices.length) s.phase = s.previousPhase;
+    for (const member of squad(s)) {
+      if (!(s.sharedUpgrades?s.choices:member.choices).length && member.player.hp>0) member.player.hp=member.player.maxHp;
+    }
+    if (!this.pendingDrafts()) s.phase=s.previousPhase;
   }
   chooseUpgrade(id: UpgradeId, pilot: PilotId = 0, draftId = this.state.draftId) {
-    const s = this.state, choices = pilot ? s.partnerChoices : s.choices;
-    if (s.phase !== 'upgrade' || draftId !== s.draftId || (pilot === 1 && (!s.partner || s.sharedUpgrades)) || !choices.some(c => c.id === id)) return false;
-    this.applyUpgrade(id, pilot);
-    if (pilot) s.partnerChoices = []; else s.choices = [];
-    if (!s.choices.length && !s.partnerChoices.length) s.phase = s.previousPhase;
+    const s=this.state, member=pilotState(s,pilot);
+    if (!member || s.phase!=='upgrade' || draftId!==s.draftId || (pilot!==0 && s.sharedUpgrades) || !member.choices.some(c=>c.id===id)) return false;
+    this.applyUpgrade(id,pilot); member.choices=[];
+    if (!this.pendingDrafts()) s.phase=s.previousPhase;
     this.emit('upgrade');
     return true;
   }
@@ -1251,8 +1258,8 @@ export class Simulation {
       def = UPGRADES.find((u) => u.id === id);
     if (!def || this.rank(id, pilot) >= def.max) return;
     this.ranks(pilot)[id] = this.rank(id, pilot) + 1;
-    for (const p of s.sharedUpgrades ? this.pilots() : [pilot === 1 && s.partner ? s.partner : s.player]) {
-      const ship = p === s.player ? s.ship : s.partnerShip!;
+    for (const p of s.sharedUpgrades ? this.pilots() : [pilotState(s,pilot)!.player]) {
+      const ship = squad(s).find(m=>m.player===p)!.ship;
       if (id === 'damage')
         p.damage += SHIPS.find((x) => x.id === ship)!.damage * 0.2;
       if (id === 'overdrive') {
@@ -1275,9 +1282,9 @@ export class Simulation {
     }
   }
   reroll(pilot: PilotId = 0, draftId = this.state.draftId) {
-    const s = this.state, choices = pilot ? s.partnerChoices : s.choices;
-    if (s.phase !== 'upgrade' || s.draftId !== draftId || !choices.length || (pilot === 1 && s.sharedUpgrades) || (pilot ? s.partnerRerolls : s.rerolls) <= 0) return false;
-    if (pilot) s.partnerRerolls--; else s.rerolls--;
+    const s=this.state, member=pilotState(s,pilot);
+    if (!member || s.phase!=='upgrade' || s.draftId!==draftId || !member.choices.length || (pilot!==0 && s.sharedUpgrades) || member.rerolls<=0) return false;
+    member.rerolls--;
     this.draft(pilot); this.emit('click'); return true;
   }
   purchase(id: 'repair' | 'module' | 'charge') {
@@ -1294,7 +1301,7 @@ export class Simulation {
       (id === 'charge' && this.pilots().every((p) => p.pulse >= 100))
     )
       return false;
-    if (id === 'module' && !UPGRADES.some(u => this.rank(u.id, 0) < u.max || (s.partner && !s.sharedUpgrades && this.rank(u.id, 1) < u.max)))
+    if (id === 'module' && !squad(s).some(m => UPGRADES.some(u=>this.rank(u.id,m.slot)<u.max)))
       return false;
     s.stats.scrap -= cost;
     s.stationBought.push(id);
@@ -1330,6 +1337,7 @@ export class Simulation {
       s.player.x = -5;
     }
     s.spawnTimer = 2;
+    for (const member of s.extraPilots) Object.assign(member.player,{x:member.slot===2?-5:5,y:8,vx:0,vy:0});
     s.intermission = 0;
     s.phase = 'playing';
     this.banner(`SECTOR ${String(sectorNumber(s)).padStart(2, '0')}`, SECTORS[s.sector].name, 4);

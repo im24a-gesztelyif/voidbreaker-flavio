@@ -187,3 +187,49 @@ test('real peers: join, rejoin, launch, movement, dash, pause, signaling recover
     await Promise.all(contexts.map((c) => c.close()));
   }
 });
+
+test('four real pilots: roster, fifth-player rejection, independent controls, shared hangar and rematch', async ({browser,baseURL},testInfo)=>{
+  test.setTimeout(180_000);
+  const contexts=await Promise.all(Array.from({length:5},()=>browser.newContext({viewport:{width:1280,height:720}})));
+  await Promise.all(contexts.map(instrument));
+  const pages=await Promise.all(contexts.map(c=>c.newPage()));const [host,...guests]=pages;const errors=[];
+  pages.forEach(p=>p.on('pageerror',e=>errors.push(e.message)));
+  try {
+    await host.goto(baseURL);await host.getByRole('button',{name:'ONLINE CO-OP'}).click();await host.getByRole('button',{name:'CREATE ROOM'}).click();
+    await expect(host.locator('.room-code strong')).toBeVisible();const code=await host.locator('.room-code strong').innerText();
+    await host.getByLabel('Power-ups').selectOption('false');await host.getByLabel('Kill display').selectOption('false');await host.getByLabel('Room mission').selectOption('endless');
+    for(let i=0;i<3;i++){
+      await guests[i].goto(`${baseURL}/?room=${code}`);await guests[i].getByRole('button',{name:'JOIN ROOM'}).click();
+      await expect(host.locator('.room-code small')).toHaveText(`${i+2}/4 PILOTS IN PARTY`);
+    }
+    for(const p of pages.slice(0,4)){await expect(p.locator('.crew-grid > div:not(.crew-empty)')).toHaveCount(4);await expect(p.getByLabel('Power-ups')).toHaveValue('false');}
+    await guests[1].getByRole('button',{name:'Leave room',exact:true}).click();await expect(host.locator('.room-code small')).toHaveText('3/4 PILOTS IN PARTY');
+    await guests[1].goto(`${baseURL}/?room=${code}`);await guests[1].getByRole('button',{name:'JOIN ROOM'}).click();await expect(host.locator('.room-code small')).toHaveText('4/4 PILOTS IN PARTY');
+    await guests[3].goto(`${baseURL}/?room=${code}`);await guests[3].getByRole('button',{name:'JOIN ROOM'}).click();await expect(guests[3].getByRole('alert')).toContainText('full');
+    await guests[1].locator('.lobby-loadout summary').click();await guests[1].getByRole('tab',{name:/WRAITH/}).click();
+    await expect(host.locator('.crew-grid')).toContainText('WRAITH');
+    await host.getByRole('button',{name:'LAUNCH TOGETHER'}).click();
+    for(const p of pages.slice(0,4)){await expect.poll(async()=> (await status(p))?.pilots.length).toBe(4);await expect(p.locator('.wingmate-hud')).toHaveCount(3);}
+    const before=await Promise.all(pages.slice(0,4).map(status));expect(new Set(before.map(s=>s.localPilot)).size).toBe(4);
+    const keys=['a','d','w','s'];await Promise.all(pages.slice(0,4).map((p,i)=>p.keyboard.down(keys[i])));
+    for(let i=0;i<4;i++)await expect.poll(async()=>{
+      const now=await status(pages[i]);return Math.hypot(now.player.x-before[i].player.x,now.player.y-before[i].player.y);
+    }).toBeGreaterThan(3);
+    await Promise.all(pages.slice(0,4).map((p,i)=>p.keyboard.up(keys[i])));
+    for(let i=1;i<4;i++){const local=await status(pages[i]);await expect.poll(async()=>{
+      const remote=(await status(host)).pilots.find(m=>m.slot===local.localPilot);return Math.hypot(remote.x-local.player.x,remote.y-local.player.y);
+    }).toBeLessThan(2);}
+    await guests[2].keyboard.press('Escape');await expect(host.getByRole('heading',{name:'TAKE A BREATH.'})).toBeVisible();
+    for(const p of guests.slice(0,3))await expect(p.getByRole('button',{name:'COMMANDER RESUMES'})).toBeDisabled();
+    await host.getByRole('button',{name:'RESUME FLIGHT'}).click();await expect.poll(async()=> (await status(guests[2])).phase).toBe('playing');
+    await host.screenshot({path:testInfo.outputPath('four-pilot-host.png')});
+    await guests[2].setViewportSize({width:844,height:390});await guests[2].screenshot({path:testInfo.outputPath('four-pilot-landscape.png')});
+    await host.keyboard.press('Escape');await host.getByRole('button',{name:/Abandon run/}).click();
+    for(const p of guests.slice(0,3)){await expect(p.locator('.room-code strong')).toHaveText(code);await expect.poll(async()=> (await status(p)).phase).toBe('menu');}
+    await host.getByRole('button',{name:'ONLINE CO-OP'}).click();await host.getByRole('button',{name:'LAUNCH TOGETHER'}).click();
+    for(const p of pages.slice(0,4)){await expect.poll(async()=> (await status(p)).phase).toBe('playing');expect((await status(p)).multiplayer.run).not.toBe(before[0].multiplayer.run);}
+    await guests[2].close();
+    for(const p of pages.slice(0,3))await expect(p.getByRole('heading',{name:'REGROUP IN THE HANGAR.'})).toBeVisible({timeout:40000});
+    expect(errors).toEqual([]);
+  } finally {await Promise.all(contexts.map(c=>c.close()));}
+});

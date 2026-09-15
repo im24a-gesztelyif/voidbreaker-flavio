@@ -1,3 +1,4 @@
+import { squad } from './squad';
 import { DamageFeedback } from './damage-feedback';
 import { BOSS_VARIANTS } from './rules';
 import * as THREE from 'three';
@@ -21,6 +22,7 @@ export class SpaceRenderer {
   private composer: EffectComposer;
   private bloom: UnrealBloomPass;
   private ships = SHIPS.map((s) => createShip(s.id));
+  private squadShips = new Map<string, THREE.Group>();
   private partners = SHIPS.map((s) => createShip(s.id));
   private partnerRing = new THREE.Mesh(
     new THREE.RingGeometry(2.1, 2.22, 48),
@@ -319,9 +321,9 @@ export class SpaceRenderer {
       const smooth = this.lastMenu ? 1 : 1 - Math.exp(-dt * 4);
       this.target.lerp(
         new THREE.Vector3(
-          (p.hp <= 0 && s.partner ? s.partner.x : p.x) * 0.85,
+          (p.hp<=0 ? (squad(s).find(m=>m.player.hp>0)?.player.x ?? p.x) : p.x) * 0.85,
           0,
-          (p.hp <= 0 && s.partner ? s.partner.y : p.y) * 0.85,
+          (p.hp<=0 ? (squad(s).find(m=>m.player.hp>0)?.player.y ?? p.y) : p.y) * 0.85,
         ),
         smooth,
       );
@@ -351,20 +353,23 @@ export class SpaceRenderer {
         Math.max(-0.24, Math.min(0.24, p.vx * 0.008)),
       );
     }
-    this.partners.forEach((g, i) => {
-      const other = s.partner;
-      g.visible = !menu && !!other && SHIPS[i].id === s.partnerShip;
-      if (!g.visible || !other) return;
-      this.temp.set(other.x + other.vx * this.snapshotAge, 0.5, other.y + other.vy * this.snapshotAge);
-      if (network && !this.lastMenu)
-        g.position.lerp(this.temp, 1 - Math.exp(-dt * 22));
-      else g.position.copy(this.temp);
-      g.scale.setScalar(other.hp > 0 ? 1.25 : 0.65);
-      g.rotation.set(0, -other.angle - Math.PI / 2, 0);
-    });
-    this.partnerRing.visible = !menu && !!s.partner;
-    if (s.partner)
-      this.partnerRing.position.set(s.partner.x, 0.12, s.partner.y);
+    this.partners.forEach(g=>{g.visible=false;});
+    this.partnerRing.visible=false;
+    this.squadShips.forEach(g=>{g.visible=false;});
+    if(!menu) for(const member of squad(s).slice(1)) {
+      const key=`${member.slot}:${member.ship}`;
+      let g=this.squadShips.get(key);
+      if(!g) {
+        g=createShip(member.ship);
+        const ring=new THREE.Mesh(this.partnerRing.geometry,new THREE.MeshBasicMaterial({color:['#b1ff79','#b99cff','#ffc178','#ff91cf'][member.slot],transparent:true,opacity:.55,side:THREE.DoubleSide}));
+        ring.rotation.x=-Math.PI/2;ring.position.y=-.3;g.add(ring);
+        this.squadShips.set(key,g);this.scene.add(g);g.position.set(member.player.x,.5,member.player.y);
+      }
+      const other=member.player;g.visible=true;
+      this.temp.set(other.x+other.vx*this.snapshotAge,.5,other.y+other.vy*this.snapshotAge);
+      if(network&&!this.lastMenu)g.position.lerp(this.temp,1-Math.exp(-dt*22));else g.position.copy(this.temp);
+      g.scale.setScalar(other.hp>0?1.25:.65);g.rotation.set(0,-other.angle-Math.PI/2,0);
+    }
     this.lastMenu = menu;
     ship.traverse((o) => {
       if (o.userData.thruster) {
@@ -577,12 +582,11 @@ export class SpaceRenderer {
       ctx.stroke();ctx.font='bold 11px monospace';ctx.textAlign='center';ctx.fillText(hull?'HULL HIT':'SHIELD HIT',pos.x,pos.y+54);
       ctx.restore();
     }
-    if (s.partner) {
-      const pos = this.project(s.partner.x, s.partner.y);
-      ctx.font = 'bold 12px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#d3bfff';
-      ctx.fillText(s.partner.hp > 0 ? 'WINGMATE' : 'DOWNED', pos.x, pos.y - 30);
+    for (const member of squad(s).slice(1)) {
+      const pos=this.project(member.player.x,member.player.y);
+      ctx.font='bold 12px monospace';ctx.textAlign='center';
+      ctx.fillStyle=['#b1ff79','#b99cff','#ffc178','#ff91cf'][member.slot];
+      ctx.fillText(member.player.hp>0?`PILOT ${member.slot+1}`:'DOWNED',pos.x,pos.y-30);
     }
 
     for (const e of s.enemies) {
