@@ -10,6 +10,8 @@
     "build": "vinext build",
     "build:vercel": "node scripts/build-vercel.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
+    "dev:multiplayer": "wrangler dev --config workers/multiplayer/wrangler.jsonc",
+    "deploy:multiplayer": "wrangler deploy --config workers/multiplayer/wrangler.jsonc",
     "lint": "oxlint",
     "format": "oxfmt",
     "pretest": "node scripts/check-conflicts.mjs",

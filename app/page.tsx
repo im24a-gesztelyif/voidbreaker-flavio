@@ -96,7 +96,7 @@ export default function Home() {
   const [inviteCode, setInviteCode] = useState('');
   const isGuest = room.current?.role === 'guest' && !!room.current.run;
   const pauseGame = () => {
-    if (room.current?.role === 'guest') room.current.requestPause();
+    if (room.current?.serverAuthoritative || room.current?.role === 'guest') room.current?.requestPause();
     else {
       sim.current.pause();
       room.current?.broadcast(sim.current.state, true);
@@ -166,12 +166,13 @@ export default function Home() {
   };
   const chooseModule = (id: UpgradeId | null) => {
     const s = sim.current.state;
-    if (room.current?.role === 'guest') room.current.choose(id, s.draftId);
+    if (room.current?.serverAuthoritative || room.current?.role === 'guest') room.current?.choose(id, s.draftId);
     else { if (id === null) sim.current.reroll(); else sim.current.chooseUpgrade(id); room.current?.broadcast(s, true); }
     refresh();
   };
   const start = () => {
     if (room.current && (room.current.role==='guest' || !room.current.canLaunch)) return;
+    if(room.current?.serverAuthoritative){room.current.launch();return;}
     sim.current = new Simulation(
       saveRef.current.ship,
       saveRef.current.weapon,
@@ -375,7 +376,9 @@ export default function Home() {
         pulse: actions.current.pulse,
       };
       accumulator += dt;
-      if (room.current?.role === 'guest' && room.current.run) {
+      if (room.current?.serverAuthoritative && room.current.run) {
+        room.current.submit(input, saveRef.current.settings.autoFire);actions.current={dash:false,pulse:false};accumulator=0;
+      } else if (room.current?.role === 'guest' && room.current.run) {
         room.current.submit(input, saveRef.current.settings.autoFire);
         actions.current = { dash: false, pulse: false };
         accumulator = 0;

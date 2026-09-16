@@ -1,4 +1,5 @@
 import { squad } from './squad';
+import { cloudflareMultiplayerUrl } from './multiplayer-endpoint';
 import type { Peer, DataConnection } from 'peerjs';
 import { SnapshotEncoder, SnapshotDecoder } from './codec';
 import { cleanOptions, defaultOptions } from './rules';
@@ -92,7 +93,7 @@ export class Multiplayer {
   }
 
   private links = new Map<DataConnection,Link>();
-  get canLaunch() {return this.status==='connected' && this.links.size>0 && [...this.links.values()].every(l=>!!l.save);}
+  get canLaunch() {return this.cloudEndpoint ? this.status==='connected' && this.role==='host' && this.members.length>=2 : this.status==='connected' && this.links.size>0 && [...this.links.values()].every(l=>!!l.save);}
   get remotes() {return this.members.filter(m=>m.slot!==0);}
   run = '';
   latency = 0;
@@ -119,6 +120,9 @@ export class Multiplayer {
   private pending = neutralInput();
   private sentAt = 0;
   private snapshotAt = 0;
+  private socket?: WebSocket;
+  private cloudEndpoint = cloudflareMultiplayerUrl();
+  get serverAuthoritative() { return !!this.cloudEndpoint; }
   constructor(
     private callbacks: {
       hangar?: () => void;
@@ -148,6 +152,7 @@ export class Multiplayer {
       return;
     }
     this.update('connecting');
+    if (this.cloudEndpoint) return this.openCloudflare();
     try {
       const [{ Peer }, config] = await Promise.all([
         import('peerjs'),
@@ -165,6 +170,14 @@ export class Multiplayer {
       );
     }
   }
+  private openCloudflare() {
+    const socket=this.socket=new WebSocket(`${this.cloudEndpoint}/room/${this.code}`);
+    this.timeout=setTimeout(()=>this.fail('Cloudflare room connection timed out.'),15000);
+    socket.onopen=()=>{clearTimeout(this.timeout);this.cloudSend({type:'join',name:this.name,save:this.callbacks.save()});};
+    socket.onmessage=e=>this.cloudReceive(e.data);socket.onerror=()=>this.fail('Cloudflare room connection failed.');socket.onclose=()=>{if(!this.disposed&&this.status!=='error')this.fail('Cloudflare room disconnected.');};
+  }
+  private cloudSend(data: unknown){if(this.socket?.readyState===WebSocket.OPEN)this.socket.send(JSON.stringify(data));}
+  private cloudReceive(raw: unknown){if(typeof raw!=='string')return;let m:Record<string,unknown>;try{m=JSON.parse(raw) as Record<string,unknown>}catch{return}if(m.type==='roster'&&typeof m.slot==='number'&&Array.isArray(m.members)){this.slot=m.slot as PilotId;this.members=m.members as RoomMember[];this.partySize=m.members.length;this.options=cleanOptions(m.options);if(!m.flying)this.run='';this.update(m.members.length>1?'connected':'waiting');return}if(m.type==='state'&&typeof m.run==='string'){const fresh=this.run!==m.run;if(fresh)this.decoder.reset();const s=this.decoder.decode(m.frame);if(!s)return;this.run=m.run;this.callbacks.snapshot(this.slot===0?s:guestView(s,this.slot),fresh);}}
   private async iceConfig(): Promise<RTCConfiguration> {
     let iceServers: RTCIceServer[] = STUN_SERVERS;
     try {
@@ -442,6 +455,7 @@ export class Multiplayer {
     for(const c of all)this.sendTo(c,data);
   }
   updateLoadout() {
+    if(this.cloudEndpoint){if(!this.run)this.cloudSend({type:'loadout',name:this.name,save:this.callbacks.save()});return;}
     if(this.run)return;
     if(this.role==='host' && (this.links.size || !this.connection))this.syncRoster();
     else this.send({type:'hello',protocol:ROOM_PROTOCOL,name:this.name,save:this.callbacks.save(),...(this.role==='host'?{options:this.options}:{})});
@@ -449,13 +463,17 @@ export class Multiplayer {
   configure(options: Partial<RoomOptions>) {
     if (this.role !== 'host' || this.run) return;
     this.options = cleanOptions({...this.options, ...options});
+    if(this.cloudEndpoint){this.cloudSend({type:'configure',options:this.options});this.callbacks.change();return;}
     this.send({type: 'options', options: this.options});
     this.callbacks.change();
   }
   choose(id: UpgradeId | null, draft: number) {
+    if(this.cloudEndpoint){this.cloudSend(id===null?{type:'reroll',draft}:{type:'choose',id,draft});return;}
     this.send({type: id === null ? 'reroll' : 'choose', id, draft, run: this.run});
   }
+  launch() { if(this.cloudEndpoint)this.cloudSend({type:'launch'}); }
   begin() {
+    if(this.cloudEndpoint)return;
     this.clearRun();
     this.encoder.reset();
     for(const link of this.links.values()){link.encoder.reset();link.input=neutralInput();link.received=-1;link.lastInput=0;}
@@ -477,11 +495,13 @@ export class Multiplayer {
     this.lastInput = 0;
   }
   returnToHangar() {
+    if(this.cloudEndpoint){this.cloudSend({type:'hangar'});return;}
     if (this.status !== 'connected')return;
     this.send({type:'hangar',run:this.run});
     if(this.role==='host'){this.clearRun();this.callbacks.hangar?.();this.syncRoster();}
   }
   broadcast(state: GameState, force = false) {
+    if(this.cloudEndpoint)return;
     if (this.role !== 'host' || !this.run || this.status !== 'connected')
       return;
     const now = performance.now();
@@ -495,6 +515,7 @@ export class Multiplayer {
     }
   }
   submit(input: GameInput, autoFire: boolean) {
+    if(this.cloudEndpoint){this.cloudSend({type:'input',input,autoFire});return;}
     this.pending = {
       ...input,
       dash: input.dash || this.pending.dash,
@@ -515,6 +536,7 @@ export class Multiplayer {
     this.pending.pulse = false;
   }
   consume(slot: PilotId = 1): GameInput {
+    if(this.cloudEndpoint)return neutralInput();
     const link=[...this.links.values()].find(l=>l.slot===slot);
     if(link){
       if(Date.now()-link.lastInput>400)return neutralInput();
@@ -528,6 +550,7 @@ export class Multiplayer {
     return result;
   }
   requestPause() {
+    if(this.cloudEndpoint){this.cloudSend({type:'pause'});return;}
     this.send({ type: 'pause', run: this.run });
   }
   releaseInput() {
@@ -555,6 +578,7 @@ export class Multiplayer {
     clearTimeout(this.timeout);
     clearTimeout(this.reconnectTimeout);
     this.releaseConnection();
+    this.socket?.close();this.socket=undefined;
     this.peer?.destroy();
   }
 }
