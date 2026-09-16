@@ -7,10 +7,10 @@ export const DIFFICULTIES: Record<Difficulty, { name: string; description: strin
   veteran: { name: 'Veteran', description: 'Relentless pressure. Precise dodges and strong builds required.', health: 1.55, damage: 1.6, speed: 1.16, projectile: 1.25, pressure: 1.4, warning: .8, enemies: 64, reward: 1.55 },
   ace: { name: 'Ace', description: 'Maximum threat. Dense crossfire, lethal hits, very little hesitation.', health: 1.9, damage: 2, speed: 1.25, projectile: 1.4, pressure: 1.65, warning: .7, enemies: 76, reward: 1.9 },
 };
-export const defaultOptions = (): RoomOptions => ({ mode: 'campaign', difficulty: 'normal', sharedUpgrades: true, sharedKills: true });
+export const defaultOptions = (): RoomOptions => ({ mode: 'campaign', difficulty: 'normal', sharedUpgrades: false, sharedKills: false });
 export function cleanOptions(value: unknown): RoomOptions {
   const v = (value && typeof value === 'object' ? value : {}) as Partial<RoomOptions>;
-  return { mode: v.mode === 'endless' ? 'endless' : 'campaign', difficulty: Object.hasOwn(DIFFICULTIES, v.difficulty || '') ? v.difficulty! : 'normal', sharedUpgrades: v.sharedUpgrades !== false, sharedKills: v.sharedKills !== false };
+  return { mode: v.mode === 'endless' ? 'endless' : 'campaign', difficulty: Object.hasOwn(DIFFICULTIES, v.difficulty || '') ? v.difficulty! : 'normal', sharedUpgrades: v.sharedUpgrades === true, sharedKills: v.sharedKills === true };
 }
 export const sectorNumber = (s: Pick<GameState, 'sector' | 'loop'>) => s.loop * 3 + s.sector + 1;
 export const BOSS_VARIANTS = [

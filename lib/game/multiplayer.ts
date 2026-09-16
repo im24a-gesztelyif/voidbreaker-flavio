@@ -18,6 +18,11 @@ export type RoomStatus =
   | 'disconnected'
   | 'error';
 export const MAX_PARTY_PLAYERS = 4;
+export const ROOM_PROTOCOL = 6;
+export const cleanPilotName = (value: unknown) => typeof value === 'string' ? value.normalize('NFKC').replace(/[\p{Cc}\p{Cf}<>]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 20) : '';
+export function savedPilotName() { try { return cleanPilotName(localStorage.getItem('voidbreaker-pilot-name')); } catch { return ''; } }
+export function storePilotName(name: string) { try { localStorage.setItem('voidbreaker-pilot-name', cleanPilotName(name)); } catch {} }
+
 export const neutralInput = (): GameInput => ({
   x: 0,
   y: 0,
@@ -58,11 +63,11 @@ export function guestView(s: GameState, slot: PilotId = 1): GameState {
     extraPilots:crew.filter(p=>p.slot!==slot&&p.slot!==0).map(p=>({...p}))};
 }
 interface Link {
-  slot: PilotId; save: SaveData | null; input: GameInput; received: number; lastInput: number; lastSeen: number;
+  slot: PilotId; name: string; save: SaveData | null; input: GameInput; received: number; lastInput: number; lastSeen: number;
   latency: number; encoder: SnapshotEncoder; timer?: ReturnType<typeof setInterval>; timeout?: ReturnType<typeof setTimeout>;
 }
-export interface RoomMember {slot:PilotId; save:SaveData}
-const PREFIX = 'voidbreaker-v5-';
+export interface RoomMember {slot:PilotId; name?:string; save:SaveData}
+const PREFIX = 'voidbreaker-v6-';
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export const normalizeCode = (value: string) =>
   value
@@ -70,7 +75,7 @@ export const normalizeCode = (value: string) =>
     .replace(/[^A-Z0-9]/g, '')
     .slice(0, 8);
 
-/** One commander owns the simulation. The wingmate can only submit inputs and pause requests. */
+/** One commander owns the simulation. Guests submit controls over their own channel-assigned pilot slot. */
 export class Multiplayer {
   role: 'host' | 'guest' = 'host';
   status: RoomStatus = 'idle';
@@ -80,6 +85,12 @@ export class Multiplayer {
   partySize = 1;
   slot: PilotId = 1;
   members: RoomMember[] = [];
+  name = savedPilotName();
+  setName(value: string) {
+    if (this.run) return;
+    this.name = cleanPilotName(value); storePilotName(this.name); this.updateLoadout(); this.callbacks.change();
+  }
+
   private links = new Map<DataConnection,Link>();
   get canLaunch() {return this.status==='connected' && this.links.size>0 && [...this.links.values()].every(l=>!!l.save);}
   get remotes() {return this.members.filter(m=>m.slot!==0);}
@@ -201,7 +212,7 @@ export class Multiplayer {
             peer.connect(PREFIX + this.code, {
               reliable: true,
               serialization: 'binary',
-              metadata: { protocol: 5 },
+              metadata: { protocol: ROOM_PROTOCOL },
             }),
           );
         } catch {
@@ -220,7 +231,7 @@ export class Multiplayer {
         this.role !== 'host' ||
         this.connections.size >= MAX_PARTY_PLAYERS - 1 ||
         this.run ||
-        c.metadata?.protocol !== 5
+        c.metadata?.protocol !== ROOM_PROTOCOL
       ) {
         const cleanup = setTimeout(() => c.close(), 20000);
         c.on('error', () => {
@@ -287,21 +298,21 @@ export class Multiplayer {
     const ready=[...this.links.values()].filter(l=>l.save);
     const pending=[...this.links.values()].filter(l=>!l.save);
     [...ready,...pending].forEach((l,i)=>{l.slot=(i+1) as PilotId;});
-    this.members=[{slot:0,save:this.callbacks.save()},...ready.map(l=>({slot:l.slot,save:l.save!}))];
+    this.members=[{slot:0,name:this.name || 'Commander',save:this.callbacks.save()},...ready.map(l=>({slot:l.slot,name:l.name || `Pilot ${l.slot+1}`,save:l.save!}))];
     this.partySize=this.members.length;
     this.remoteSave=ready[0]?.save || null;
     for(const [c,l] of this.links) if(l.save) this.sendTo(c,{type:'roster',slot:l.slot,members:this.members,options:this.options});
     this.update(ready.length?'connected':'waiting');
   }
   private attach(c: DataConnection) {
-    const link:Link={slot:([...this.links.keys()].length+1) as PilotId,save:null,input:neutralInput(),received:-1,lastInput:0,lastSeen:Date.now(),latency:0,encoder:new SnapshotEncoder()};
+    const link:Link={slot:([...this.links.keys()].length+1) as PilotId,name:'',save:null,input:neutralInput(),received:-1,lastInput:0,lastSeen:Date.now(),latency:0,encoder:new SnapshotEncoder()};
     this.links.set(c,link);this.connections.add(c);
     if(!this.connection)this.connection=c;
     link.timeout=setTimeout(()=>this.connectionFailed(c),20000);
     c.on('open',()=>{
       if(!this.links.has(c)||this.disposed)return;
       link.lastSeen=Date.now();
-      this.sendTo(c,{type:'hello',protocol:5,save:this.callbacks.save(),...(this.role==='host'?{options:this.options,slot:link.slot}:{})});
+      this.sendTo(c,{type:'hello',protocol:ROOM_PROTOCOL,name:this.name,save:this.callbacks.save(),...(this.role==='host'?{options:this.options,slot:link.slot}:{})});
       if(!this.links.has(c))return;
       link.timer=setInterval(()=>{
         if(Date.now()-link.lastSeen>30000){this.connectionFailed(c);return;}
@@ -336,6 +347,7 @@ export class Multiplayer {
     if (!data || typeof data !== 'object' || this.disposed) return;
     const m = data as {
       slot?: PilotId;
+      name?: unknown;
       members?: RoomMember[];
       type?: string;
       message?: unknown;
@@ -372,17 +384,17 @@ export class Multiplayer {
       else {this.clearRun();this.callbacks.hangar?.();}
       return;
     }
-    if (m.type==='hello' && m.protocol===5) {
+    if (m.type==='hello' && m.protocol===ROOM_PROTOCOL) {
       if(this.run)return;
-      if(link){clearTimeout(link.timeout);link.save=loadSave(JSON.stringify(m.save));}
+      if(link){clearTimeout(link.timeout);link.save=loadSave(JSON.stringify(m.save));link.name=cleanPilotName(m.name);}
       this.remoteSave=loadSave(JSON.stringify(m.save));
       if(this.role==='host'&&link)this.syncRoster();
-      else {if(this.role==='guest'){this.options=cleanOptions(m.options);if(m.slot)this.slot=m.slot;}this.update('connected');}
+      else {if(this.role==='guest'){this.options=cleanOptions(m.options);}this.update('connected');}
       return;
     }
     if(m.type==='roster' && this.role==='guest' && !this.run && Array.isArray(m.members) && m.members.length>=2 && m.members.length<=4 && [1,2,3].includes(m.slot!)) {
       if(!m.members.every(x=>[0,1,2,3].includes(x.slot))||new Set(m.members.map(x=>x.slot)).size!==m.members.length)return;
-      this.slot=m.slot!;this.members=m.members.map(x=>({slot:x.slot,save:loadSave(JSON.stringify(x.save))}));
+      this.slot=m.slot!;this.members=m.members.map(x=>({slot:x.slot,name:cleanPilotName(x.name) || `Pilot ${x.slot+1}`,save:loadSave(JSON.stringify(x.save))}));
       this.partySize=this.members.length;this.options=cleanOptions(m.options);this.update('connected');return;
     }
     if (m.type === 'options' && this.role === 'guest' && !this.run) {
@@ -413,10 +425,14 @@ export class Multiplayer {
       }
       if (m.type === 'pause') this.callbacks.pause();
     } else if (m.type === 'state' && typeof m.run === 'string' && m.run.length === 32) {
+      // Identity comes from this channel's authoritative snapshot, never a default guest slot.
+      if (![1,2,3].includes(m.slot!)) return;
       const newRun = this.run !== m.run;
       if (newRun) this.decoder.reset();
       const state = this.decoder.decode(m.frame);
       if (!state) return;
+      if (!squad(state).some(p=>p.slot===m.slot)) { this.fail('Your ship is missing from this run. Refresh all pilots and create a new room.'); return; }
+      this.slot=m.slot!;
       this.run = m.run;
       this.callbacks.snapshot(guestView(state,this.slot), newRun);
     }
@@ -427,8 +443,8 @@ export class Multiplayer {
   }
   updateLoadout() {
     if(this.run)return;
-    if(this.role==='host'&&this.links.size)this.syncRoster();
-    else this.send({type:'hello',protocol:5,save:this.callbacks.save(),...(this.role==='host'?{options:this.options}:{})});
+    if(this.role==='host' && (this.links.size || !this.connection))this.syncRoster();
+    else this.send({type:'hello',protocol:ROOM_PROTOCOL,name:this.name,save:this.callbacks.save(),...(this.role==='host'?{options:this.options}:{})});
   }
   configure(options: Partial<RoomOptions>) {
     if (this.role !== 'host' || this.run) return;
@@ -471,11 +487,11 @@ export class Multiplayer {
     const now = performance.now();
     if (!force && now-this.snapshotAt < (state.phase==='playing'?50:1000))return;
     this.snapshotAt=now;
-    if(!this.links.size){this.send({type:'state',run:this.run,frame:this.encoder.encode(state,force)});return;}
+    if(!this.links.size){this.send({type:'state',slot:1,run:this.run,frame:this.encoder.encode(state,force)});return;}
     for(const [c,link] of this.links){
       if(!link.save||!c.open)continue;
       if(!force&&(c.dataChannel?.bufferedAmount||0)>32000)continue;
-      this.sendTo(c,{type:'state',run:this.run,frame:link.encoder.encode(state,force)});
+      this.sendTo(c,{type:'state',slot:link.slot,run:this.run,frame:link.encoder.encode(state,force)});
     }
   }
   submit(input: GameInput, autoFire: boolean) {
@@ -504,7 +520,7 @@ export class Multiplayer {
       if(Date.now()-link.lastInput>400)return neutralInput();
       const result={...link.input};link.input.dash=false;link.input.pulse=false;return result;
     }
-    if(slot!==1)return neutralInput();
+    if(this.links.size || slot!==1)return neutralInput();
     if (Date.now() - this.lastInput > 400) return neutralInput();
     const result = { ...this.input };
     this.input.dash = false;

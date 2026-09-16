@@ -183,6 +183,7 @@ export default function Home() {
     if (room.current?.role === 'guest') return;
     if (room.current?.status === 'connected' && room.current.remoteSave) {
       for (const {slot,save:remote} of room.current.remotes) sim.current.addPilot(slot,remote.ship,remote.weapon,remote);
+      sim.current.state.pilotNames=Object.fromEntries(room.current.members.map(m=>[m.slot,m.name]));
       room.current.begin();
     }
     sim.current.start();
@@ -458,7 +459,7 @@ export default function Home() {
                 sharedUpgrades: sim.current.state.sharedUpgrades,
                 sharedKills: sim.current.state.sharedKills,
                 hull: sim.current.state.player.hp,
-                pilots: squad(sim.current.state).map(m=>({slot:m.slot,ship:m.ship,x:m.player.x,y:m.player.y,hp:m.player.hp,kills:m.player.kills,upgrades:m.upgrades,choices:m.choices.map(c=>c.id)})),
+                pilots: squad(sim.current.state).map(m=>({slot:m.slot,name:sim.current.state.pilotNames?.[m.slot],stats:sim.current.state.pilotStats?.[m.slot],ship:m.ship,x:m.player.x,y:m.player.y,hp:m.player.hp,kills:m.player.kills,upgrades:m.upgrades,choices:m.choices.map(c=>c.id)})),
                 localPilot: sim.current.state.localPilot ?? 0,
                 score: sim.current.score(),
                 time: sim.current.state.totalTime,
@@ -1178,7 +1179,11 @@ export default function Home() {
                 <b>+{result.earned}</b>CORE SHARDS
               </div>
             </div>
-            {s.partner && !s.sharedKills && <p>YOUR KILLS {p.kills} · WINGMATE KILLS {s.partner.kills} · TEAM TOTAL {s.stats.kills}</p>}
+            {s.partner && <div className="squad-results">{squad(s).map(m=><div key={m.slot}>
+              <strong>{s.pilotNames?.[m.slot] || `Pilot ${m.slot+1}`}{m.slot===(s.localPilot??0)?' / YOU':''}</strong>
+              <span>{m.player.kills} kills / {Math.round(s.pilotStats?.[m.slot]?.damage || 0)} damage / {s.pilotStats?.[m.slot]?.shots || 0} shots</span>
+              <small>{Object.entries(m.upgrades).map(([id,rank])=>`${id} ${rank}`).join(' / ') || 'No modules'}</small>
+            </div>)}</div>}
             {result.achievements.length > 0 && (
               <p className="achievement-toast">
                 <Trophy size={16} />{' '}
@@ -1400,7 +1405,7 @@ export default function Home() {
       {!menu && s.partner && (
         <div className="wingmate-stack">
           {squad(s).slice(1).map(member=><div className="wingmate-hud" key={member.slot} data-pilot={member.slot}>
-            <Users size={15}/><div><span>{member.slot===0?'COMMANDER':`PILOT ${member.slot+1}`} - {member.ship.toUpperCase()}</span>
+            <Users size={15}/><div><span>{s.pilotNames?.[member.slot] || (member.slot===0?'COMMANDER':`PILOT ${member.slot+1}`)} - {member.ship.toUpperCase()}</span>
             <strong>{member.player.hp<=0?'DOWN - RETURNS NEXT WAVE':`${Math.ceil(member.player.hp)} HULL`}</strong></div>
             {!s.sharedKills&&<b>{member.player.kills} KILLS</b>}
           </div>)}

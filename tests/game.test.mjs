@@ -16,14 +16,14 @@ for (const name of ['types','squad','content','rules','damage-feedback','codec',
 }
 const { Simulation, loadSave } = await import(pathToFileURL(join(directory,'simulation.mjs')));
 const { freshSave, UPGRADES } = await import(pathToFileURL(join(directory,'content.mjs')));
-const { Multiplayer, cleanInput, neutralInput, guestView } = await import(pathToFileURL(join(directory,'multiplayer.mjs')));
+const { Multiplayer, cleanInput, neutralInput, guestView, cleanPilotName } = await import(pathToFileURL(join(directory,'multiplayer.mjs')));
 after(() => {
   assert.equal(dirname(resolve(directory)), resolve(tmpdir()));
   assert.ok(basename(directory).startsWith('voidbreaker-tests-'));
   return rm(directory, {recursive:true,force:true});
 });
 const input = (patch={}) => ({...neutralInput(),...patch});
-const flight = (coop=false) => { const save=freshSave(); save.settings.autoFire=false; const s=new Simulation('kestrel','pulse',save,12345); if(coop)s.addPartner('wraith','rail',save);s.start();s.state.spawnTimer=1000;return s; };
+const flight = (coop=false) => { const save=freshSave(); save.settings.autoFire=false; const s=new Simulation('kestrel','pulse',save,12345);s.state.sharedUpgrades=true;s.state.sharedKills=true; if(coop)s.addPartner('wraith','rail',save);s.start();s.state.spawnTimer=1000;return s; };
 const frames = (s,n,a=input(),b=input()) => { for(let i=0;i<n;i++)s.step(1/60,a,b); };
 
 test('seeded simulation is deterministic', () => { const a=flight(),b=flight();frames(a,600,input({x:.2,firing:true}));frames(b,600,input({x:.2,firing:true}));assert.deepEqual(a.state,b.state); });
@@ -68,7 +68,7 @@ test('two-client protocol synchronizes runs, pauses, rematches and one-shot inpu
 });
 
 const fakeConnection = () => Object.assign(new EventEmitter(), {
-  open: false, metadata: { protocol: 5 }, send() {},
+  open: false, metadata: { protocol: 6 }, send() {},
   close() { this.open = false; this.emit('close'); },
 });
 const fakePeer = () => Object.assign(new EventEmitter(), {
@@ -87,7 +87,7 @@ test('signaling reopen preserves active rooms on both sides without duplicate ch
       if (role === 'host') peer.emit('connection', fakeConnection());
       const connection = r.connection;
       connection.open = true; connection.emit('open');
-      connection.emit('data', { type: 'hello', protocol: 5, save: freshSave() });
+      connection.emit('data', { type: 'hello', protocol: 6, save: freshSave() });
       r.begin(); const run = r.run;
       peer.emit('error', { type: 'network' }); peer.emit('open');
       assert.equal(r.status, 'connected'); assert.equal(r.connection, connection);
@@ -106,7 +106,7 @@ test('failed and expired handshakes release the host slot; stale events cannot e
     assert.equal(r.connection, undefined); assert.equal(r.status, 'waiting');
     const replacement = fakeConnection(); peer.emit('connection', replacement);
     replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 5, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 6, save: freshSave() });
     failed.emit('close'); failed.emit('data', { type: 'reject', message: 'stale' });
     assert.equal(r.status, 'connected'); assert.equal(r.connection, replacement);
     replacement.close(); assert.equal(r.status, 'waiting'); assert.equal(r.remoteSave, null);
@@ -137,7 +137,7 @@ test('a synchronous hello send failure does not leave an extra heartbeat running
     const replacement = fakeConnection(); let pings = 0;
     replacement.send = data => { if (data.type === 'ping') pings++; };
     peer.emit('connection', replacement); replacement.open = true; replacement.emit('open');
-    replacement.emit('data', { type: 'hello', protocol: 5, save: freshSave() });
+    replacement.emit('data', { type: 'hello', protocol: 6, save: freshSave() });
     t.mock.timers.tick(2000); assert.equal(pings, 1);
   } finally { r.dispose(); }
 });
@@ -292,7 +292,7 @@ test('channel identity isolates input sequences, one-shots, upgrades and backpre
   const s=four(),calls=[];const host=new Multiplayer({change(){},snapshot(){},pause(){},save:freshSave,choose:(id,draft,slot)=>calls.push(slot)});
   const channels=[];
   try {
-    for(let i=0;i<3;i++){const c=fakeConnection();c.messages=[];c.send=m=>{c.messages.push(structuredClone(m));};c.dataChannel={bufferedAmount:0};host.attach(c);c.open=true;c.emit('open');c.emit('data',{type:'hello',protocol:5,save:freshSave()});channels.push(c);}
+    for(let i=0;i<3;i++){const c=fakeConnection();c.messages=[];c.send=m=>{c.messages.push(structuredClone(m));};c.dataChannel={bufferedAmount:0};host.attach(c);c.open=true;c.emit('open');c.emit('data',{type:'hello',protocol:6,save:freshSave()});channels.push(c);}
     assert.equal(host.partySize,4);assert.equal(host.canLaunch,true);host.configure({sharedUpgrades:false});host.begin();
     for(let i=0;i<3;i++)channels[i].emit('data',{type:'input',run:host.run,seq:1,input:input({x:i-1,dash:true})});
     for(let i=1;i<=3;i++){assert.equal(host.consume(i).dash,true);assert.equal(host.consume(i).dash,false);assert.equal(host.consume(i).x,i-2);}
@@ -311,4 +311,33 @@ test('third and fourth pilots use their own pickup bonuses',()=>{
   s.collect('xp',10,crew[2].player);assert.equal(s.state.player.xp,11.5);
   s.collect('xp',10,crew[3].player);assert.equal(s.state.player.xp,24.5);
   s.collect('xp',10,crew[0].player);assert.equal(s.state.player.xp,34.5);
+});
+
+
+test('snapshot recipient overrides stale lobby identity and rejects missing identity',()=>{
+  const s=four();s.state.pilotNames={0:'Host',1:'One',2:'Two',3:'Three'};
+  let view;const guest=new Multiplayer({change(){},snapshot:v=>{view=v;},pause(){},save:freshSave});guest.role='guest';guest.status='connected';guest.slot=1;
+  const frame=new SnapshotEncoder().encode(s.state,true);const run='b'.repeat(32);
+  guest.receive({type:'state',run,frame});assert.equal(view,undefined);
+  guest.receive({type:'state',slot:3,run,frame});assert.equal(view.localPilot,3);assert.equal(view.player.x,s.state.extraPilots[1].player.x);assert.equal(view.pilotNames[3],'Three');
+  guest.receive({type:'hello',protocol:6,slot:1,save:freshSave()});assert.equal(guest.slot,3);
+});
+
+test('names are bounded and synchronized separately from ship selection',()=>{
+  assert.equal(cleanPilotName('  Ace\n  Pilot<>\u202e  '),'Ace Pilot');assert.equal(cleanPilotName('x'.repeat(40)).length,20);
+  const host=new Multiplayer({change(){},snapshot(){},pause(){},save:freshSave});
+  try { host.setName('Commander X');for(let i=0;i<3;i++){const c=fakeConnection();host.attach(c);c.open=true;c.emit('open');c.emit('data',{type:'hello',protocol:6,name:`Guest ${i}`,save:freshSave()});}
+    assert.equal(host.members.length,4);assert.deepEqual(host.members.map(m=>m.name),['Commander X','Guest 0','Guest 1','Guest 2']);assert.equal(new Set(host.members.map(m=>m.slot)).size,4);
+    assert.equal(host.options.sharedUpgrades,false);assert.equal(host.options.sharedKills,false);
+  } finally {host.dispose();}
+});
+
+
+test('personal combat stats, damage, kills and modules stay on the owning pilot',()=>{
+  const s=four();s.state.sharedUpgrades=false;const crew=squad(s.state);
+  s.step(1/60,input(),input(),{2:input({firing:true})});assert.ok(s.state.pilotStats[2].shots>0);assert.equal(s.state.pilotStats[0]?.shots||0,0);assert.equal(s.state.pilotStats[3]?.shots||0,0);
+  const target=s.spawn('drone',30,30);s.activePilot=3;s.damageEnemy(target,10000,true);assert.equal(crew[3].player.kills,1);assert.ok(s.state.pilotStats[3].damage>0);assert.equal(crew[2].player.kills,0);
+  s.hurtPlayer(10,crew[2].player);assert.equal(s.state.pilotStats[2].damageTaken,10);assert.equal(s.state.pilotStats[3].damageTaken,0);
+  const before=crew.map(m=>m.player.damage);s.applyUpgrade('damage',2);assert.ok(crew[2].player.damage>before[2]);for(const i of [0,1,3])assert.equal(crew[i].player.damage,before[i]);
+  const decoded=new SnapshotDecoder().decode(new SnapshotEncoder().encode(s.state));assert.deepEqual(decoded.pilotStats,s.state.pilotStats);
 });

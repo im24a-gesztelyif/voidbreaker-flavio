@@ -2043,3 +2043,11 @@ body {
  .wingmate-stack .wingmate-hud span,.wingmate-stack .wingmate-hud strong {font-size:8px;overflow-wrap:anywhere;}
  .large-party .boss-hud {top:140px;}
 }
+
+.pilot-name-field { display: grid; gap: 8px; margin: 16px 0 8px; }
+.room-version { display: block; color: var(--muted-foreground); margin-bottom: 12px; }
+.crew-grid strong, .wingmate-hud span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.squad-results { display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:16px 0;text-align:left; }
+.squad-results > div { display:grid;gap:6px;padding:12px;border:1px solid #36434b;overflow-wrap:anywhere; }
+.squad-results span,.squad-results small { font-size:12px; }

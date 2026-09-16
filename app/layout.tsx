@@ -13,9 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  icons: { icon: [{ url: '/favicon.png', type: 'image/png' }], apple: '/favicon.png' },
   title: 'VOIDBREAKER — The Last Light',
   description:
-    'A 3D space roguelite for solo pilots and two-player co-op. Choose your ship, build your arsenal, and fight through three sectors to the Nullheart.',
+    'A 3D space roguelite for solo pilots and up-to-four-player co-op. Choose your ship, build your arsenal, and fight through three sectors to the Nullheart.',
 };
 
 export default function RootLayout({

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { DIFFICULTIES } from '@/lib/game/rules';
 import type { Difficulty, GameMode } from '@/lib/game/types';
 import { SHIPS } from '@/lib/game/content';
-import { normalizeCode } from '@/lib/game/multiplayer';
+import { normalizeCode, cleanPilotName, savedPilotName, storePilotName, ROOM_PROTOCOL } from '@/lib/game/multiplayer';
 import type { Multiplayer } from '@/lib/game/multiplayer';
 import type { SaveData } from '@/lib/game/types';
 
@@ -31,6 +31,7 @@ export function CoopLobby({
   close: () => void;
   launch: () => void;
 }) {
+  const [name, setName] = useState(() => room?.name || savedPilotName());
   const [code, setCode] = useState(initialCode),
     [copied, setCopied] = useState(false);
   const active = room && ['waiting', 'connected'].includes(room.status);
@@ -70,6 +71,10 @@ export function CoopLobby({
         <p>
           Take on the campaign or fly into endless space. The commander sets the rules.
         </p>
+        <label className="pilot-name-field" htmlFor="pilot-name">YOUR PILOT NAME
+          <Input id="pilot-name" value={name} maxLength={20} placeholder="Choose a name" autoComplete="nickname" onChange={e=>{setName(e.target.value);storePilotName(e.target.value);room?.setName(e.target.value);}} onBlur={()=>setName(cleanPilotName(name))}/>
+        </label>
+        <small className="room-version">ROOM PROTOCOL {ROOM_PROTOCOL} / Every pilot must use the latest deployment.</small>
         <details className="lobby-loadout"><summary>YOUR SHIP & WEAPON</summary>{loadout}</details>
         {room?.message && (
           <p className="connection-error" role="alert">
@@ -96,8 +101,8 @@ export function CoopLobby({
                 const own=slot===(room.role==='host'?0:room.slot);
                 return <div key={slot} className={member?'':'crew-empty'} data-slot={slot}>
                   <span>{slot===0?'COMMANDER':`PILOT ${slot+1}`}{own?' / YOU':''}</span>
-                  <strong>{member?SHIPS.find(s=>s.id===member.save.ship)?.name:'OPEN SLOT'}</strong>
-                  <small>{member?'READY TO FLY':'Share your code or invite link'}</small>
+                  <strong>{member?member.name || `Pilot ${slot+1}`:'OPEN SLOT'}</strong>
+                  <small>{member?`${SHIPS.find(s=>s.id===member.save.ship)?.name} / READY`:'Share your code or invite link'}</small>
                 </div>;
               })}
             </div>

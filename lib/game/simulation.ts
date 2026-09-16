@@ -90,6 +90,10 @@ export class Simulation {
   private randomState: number;
   private awarded = false;
   private activePilot: PilotId = 0;
+  private personalStats(slot: PilotId = this.activePilot) {
+    const stats=this.state.pilotStats ??= {};
+    return stats[slot] ??= {damage:0,damageTaken:0,shots:0,hits:0,elites:0,bosses:0};
+  }
   constructor(
     ship: ShipId = 'kestrel',
     weapon: WeaponId = 'pulse',
@@ -475,7 +479,7 @@ export class Simulation {
         crit,
       );
     }
-    s.stats.shots += count;
+    s.stats.shots += count; this.personalStats().shots += count;
     this.emit(
       'shoot',
       weapon === 'rail' ? 0.6 : weapon === 'scatter' ? 0.8 : 1,
@@ -1020,7 +1024,7 @@ export class Simulation {
           !intersects(e, e.radius)
         )
           continue;
-        s.stats.hits++;
+        s.stats.hits++; this.personalStats().hits++;
         this.damageEnemy(e, b.damage, true, b.crit);
         b.hitIds.push(e.id);
         if (this.rank('freeze')) e.slow = 2;
@@ -1060,7 +1064,7 @@ export class Simulation {
   private damageEnemy(e: Enemy, damage: number, procs: boolean, crit = false) {
     if (e.hp <= 0) return;
     const s = this.state;
-    s.stats.damage += Math.min(e.hp, damage);
+    s.stats.damage += Math.min(e.hp, damage); this.personalStats().damage += Math.min(e.hp, damage);
     e.hp -= damage;
     e.hit = 0.09;
     this.fx(
@@ -1113,7 +1117,7 @@ export class Simulation {
     s.combo++;
     s.comboTime = 4.5;
     s.stats.maxCombo = Math.max(s.stats.maxCombo, s.combo);
-    if (e.elite) s.stats.elites++;
+    if (e.elite) {s.stats.elites++; this.personalStats().elites++;}
     for (const p of this.pilots())
       p.pulse = Math.min(
         100,
@@ -1161,13 +1165,13 @@ export class Simulation {
       for (const other of s.enemies)
         if (other.hp > 0 && distance(other, e) < 5) {
           const damage = 22 * this.rank('explode');
-          s.stats.damage += Math.min(other.hp, damage);
+          s.stats.damage += Math.min(other.hp, damage); this.personalStats().damage += Math.min(other.hp, damage);
           other.hp -= damage;
           if (other.hp <= 0) this.kill(other, true);
         }
     }
     if (e.kind === 'boss') {
-      s.stats.bosses++;
+      s.stats.bosses++; this.personalStats().bosses++;
       s.bullets = s.bullets.filter((b) => !b.hostile);
       for (const other of s.enemies) if (other.id !== e.id) other.hp = 0;
       for (const i of s.pickups) this.collect(i.kind, i.value);
@@ -1192,7 +1196,7 @@ export class Simulation {
     const shield = Math.min(p.shield, amount);
     p.shield -= shield;
     p.hp = Math.max(0, p.hp - (amount - shield));
-    s.stats.damageTaken += amount;
+    s.stats.damageTaken += amount; this.personalStats(this.pilotId(p)).damageTaken += amount;
     s.screenShake = 0.65;
     this.fx('hit', p.x, p.y, shield >= amount ? '#9fdfff' : '#ff6268', 2, 0.35);
     this.emit(shield >= amount ? 'shield' : 'hurt');
@@ -1360,7 +1364,7 @@ export class Simulation {
         s.stats.bosses * 25 +
         (s.phase === 'victory' ? 80 : 5);
     updated.totalRuns++;
-    updated.totalKills += s.stats.kills;
+    updated.totalKills += s.partner ? s.player.kills : s.stats.kills;
     updated.bestSector = Math.max(updated.bestSector, sectorNumber(s));
     updated.bestScore = Math.max(updated.bestScore, this.score());
     updated.shards += earned;

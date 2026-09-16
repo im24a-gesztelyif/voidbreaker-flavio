@@ -586,7 +586,7 @@ export class SpaceRenderer {
       const pos=this.project(member.player.x,member.player.y);
       ctx.font='bold 12px monospace';ctx.textAlign='center';
       ctx.fillStyle=['#b1ff79','#b99cff','#ffc178','#ff91cf'][member.slot];
-      ctx.fillText(member.player.hp>0?`PILOT ${member.slot+1}`:'DOWNED',pos.x,pos.y-30);
+      ctx.fillText(member.player.hp>0?(s.pilotNames?.[member.slot] || `PILOT ${member.slot+1}`):'DOWNED',pos.x,pos.y-30);
     }
 
     for (const e of s.enemies) {

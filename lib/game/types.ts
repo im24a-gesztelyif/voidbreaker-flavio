@@ -218,7 +218,10 @@ export interface PilotState {
   choices: UpgradeDef[];
   rerolls: number;
 }
+export type PilotStats = Pick<RunStats, 'damage' | 'damageTaken' | 'shots' | 'hits' | 'elites' | 'bosses'>;
 export interface GameState {
+  pilotStats?: Partial<Record<PilotId, PilotStats>>;
+  pilotNames?: Partial<Record<PilotId, string>>;
   localPilot?: PilotId;
   extraPilots: PilotState[];
   mode: GameMode;

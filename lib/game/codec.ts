@@ -9,9 +9,9 @@ const fields = {
   effects: 'id kind x y color life maxLife size targetX targetY text'.split(' '),
 };
 type Row = (number | string | boolean | null)[];
-export interface Frame { r: Row[]; p: Row; q: Row | null; e: Row[]; b: Row[]; i: Row[]; f: Row[]; d: number[]; stats: GameState['stats']; meta?: Partial<GameState> }
+export interface Frame { pilotStats?: GameState['pilotStats']; r: Row[]; p: Row; q: Row | null; e: Row[]; b: Row[]; i: Row[]; f: Row[]; d: number[]; stats: GameState['stats']; meta?: Partial<GameState> }
 const dynamic = 'time totalTime waveTime intermission bannerTime screenShake combo comboTime'.split(' ');
-const omitted = new Set(['player','partner','enemies','bullets','pickups','effects','stats','spawnTimer',...dynamic]);
+const omitted = new Set(['player','partner','enemies','bullets','pickups','effects','stats','spawnTimer','pilotStats',...dynamic]);
 const row = (value: object, keys: string[]): Row => keys.map(k => {
   const v = (value as Record<string, unknown>)[k];
   return typeof v === 'number' ? Math.round(v * 100) : (v ?? null) as Row[number];
@@ -24,7 +24,7 @@ export class SnapshotEncoder {
     const meta = Object.fromEntries(Object.entries(s).filter(([k]) => !omitted.has(k))) as Partial<GameState>;
     meta.extraPilots = (s.extraPilots || []).map(({player: _player,...rest})=>rest) as GameState['extraPilots'];
     const signature = JSON.stringify(meta);
-    const frame: Frame = { r: (s.extraPilots || []).map(m=>row(m.player,fields.player)), p: row(s.player,fields.player), q: s.partner ? row(s.partner,fields.player) : null,
+    const frame: Frame = { pilotStats: structuredClone(s.pilotStats), r: (s.extraPilots || []).map(m=>row(m.player,fields.player)), p: row(s.player,fields.player), q: s.partner ? row(s.partner,fields.player) : null,
       e: s.enemies.map(e => row(e,fields.enemies)), b: s.bullets.map(b => row(b,fields.bullets)),
       i: s.pickups.map(i => row(i,fields.pickups)), f: s.effects.map(f => row(f,fields.effects)),
       d: dynamic.map(k => Math.round((s[k as keyof GameState] as number) * 100) / 100), stats: {...s.stats} };
@@ -56,7 +56,7 @@ export class SnapshotDecoder {
     if (!f.e.every(r => ['drone','striker','gunner','bomber','warden','swarm','lancer','brood','manta','anchor','boss'].includes(r[1] as string) && (r[15] as number) >= 0 && (r[15] as number) <= 500)) return null;
     if (!Array.isArray(meta.extraPilots) || meta.extraPilots.length!==f.r.length || !meta.extraPilots.every((m,i)=>[2,3].includes(m.slot) && ['kestrel','wraith','bastion'].includes(m.ship) && ['pulse','scatter','rail'].includes(m.weapon) && !meta.extraPilots!.slice(0,i).some(p=>p.slot===m.slot)))return null;
     this.meta = meta;
-    return { ...meta, ...Object.fromEntries(dynamic.map((k,i) => [k,f.d[i]])), stats: f.stats,
+    return { ...meta, ...Object.fromEntries(dynamic.map((k,i) => [k,f.d[i]])), stats: f.stats, pilotStats: f.pilotStats,
       extraPilots: meta.extraPilots.map((m,i)=>({...m,player:object(f.r[i],fields.player)})),
       player: object(f.p,fields.player), partner: object(f.q!,fields.player),
       enemies: f.e.map(r => object(r,fields.enemies)), bullets: f.b.map(r => object(r,fields.bullets)),
